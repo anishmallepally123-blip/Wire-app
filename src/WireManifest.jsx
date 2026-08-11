@@ -67,14 +67,18 @@ const KEY = "frc-wires:v3";
 const URL_KEY = "frc-sheet-url:v1";
 const POLL_MS = 20000;
 const blank = () => ({
-  type: "PWR12", fromDevice: "", fromPort: "", toDevice: "", toPort: "",
-  notes: "", nameOverride: "",
+  type: "PWR12", stage: "schematic", fromDevice: "", fromPort: "", toDevice: "",
+  toPort: "", notes: "", nameOverride: "",
 });
+
+/* Wires saved before staging existed are already on the robot. */
+const stageOf = (w) => (w.stage === "schematic" ? "schematic" : "physical");
 
 export default function WireManifest() {
   const [wires, setWires] = useState([]);
   const [form, setForm] = useState(blank());
   const [query, setQuery] = useState("");
+  const [page, setPage] = useState("add");
   const [editingId, setEditingId] = useState(null);
   const [openId, setOpenId] = useState(null);
   const [notice, setNotice] = useState("");
@@ -168,6 +172,9 @@ export default function WireManifest() {
     return m;
   }, [wires]);
 
+  const schematic = useMemo(() => wires.filter((w) => stageOf(w) === "schematic"), [wires]);
+  const physical = useMemo(() => wires.filter((w) => stageOf(w) === "physical"), [wires]);
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return wires;
@@ -180,7 +187,7 @@ export default function WireManifest() {
   function submit() {
     if (!canSubmit) return;
     const entry = {
-      ...form, name: preview, gauge: ty.gauge,
+      ...form, name: preview, gauge: ty.gauge, stage: form.stage || "schematic",
       id: editingId || `w${Date.now()}${Math.floor(Math.random() * 100)}`,
     };
     const next = editingId
@@ -197,6 +204,11 @@ export default function WireManifest() {
     setOpenId(null);
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
+  function setStage(w, stage) {
+    const entry = { ...w, stage };
+    push("upsert", { wire: entry }, wires.map((x) => (x.id === w.id ? entry : x)));
+  }
+
   function remove(id) {
     push("delete", { id }, wires.filter((w) => w.id !== id));
     if (editingId === id) { setForm(blank()); setEditingId(null); }
@@ -276,8 +288,33 @@ export default function WireManifest() {
         </div>
       )}
 
+      <nav className="tabs" role="tablist">
+        {[
+          ["add", "Add wire", null],
+          ["schematic", "Schematic", schematic.length],
+          ["manifest", "On the robot", physical.length],
+        ].map(([id, label, n]) => (
+          <button key={id} role="tab" aria-selected={page === id}
+            className={"tab" + (page === id ? " tab-on" : "")}
+            onClick={() => { setPage(id); setOpenId(null); }}>
+            {label}{n != null && <span className="tab-n">{n}</span>}
+          </button>
+        ))}
+      </nav>
+
+      {page === "add" && (
       <section className="panel">
         <h2 className="panel-h">{editingId ? "Edit wire" : "Log a wire"}</h2>
+
+        <div className="stage-pick" role="group" aria-label="Where this wire lives">
+          {[["schematic", "On the schematic"], ["physical", "On the robot"]].map(([v, l]) => (
+            <button key={v}
+              className={"stage-btn" + (form.stage === v ? " stage-on" : "")}
+              onClick={() => setForm((f) => ({ ...f, stage: v }))}>
+              {l}
+            </button>
+          ))}
+        </div>
 
         <div className="chips" role="group" aria-label="Wire type">
           {TYPES.map((t) => (
@@ -344,9 +381,25 @@ export default function WireManifest() {
         </div>
         {notice && <p className="notice">{notice}</p>}
       </section>
+      )}
 
+      {page !== "add" && (
       <section className="panel">
-        <h2 className="panel-h">Manifest</h2>
+        <h2 className="panel-h">
+          {page === "schematic" ? "Schematic manifest" : "On the robot"}
+        </h2>
+
+        {page === "schematic" && wires.length > 0 && (
+          <div className="progress">
+            <div className="progress-bar">
+              <span style={{ width: `${Math.round((physical.length / wires.length) * 100)}%` }} />
+            </div>
+            <p className="progress-txt">
+              {physical.length} of {wires.length} built
+              {schematic.length > 0 && ` — ${schematic.length} left to run`}
+            </p>
+          </div>
+        )}
         <div className="tools">
           <button className="btn btn-sm" onClick={exportCsv} disabled={!wires.length}>Export CSV</button>
           <button className="btn btn-sm" disabled={!wires.length}
@@ -369,21 +422,36 @@ export default function WireManifest() {
           ))}
         </div>
 
-        {sync.state === "loading" ? (
-          <p className="empty">Loading the manifest…</p>
-        ) : !wires.length ? (
-          <p className="empty">Nothing logged yet. Start with the battery leads and work outward.</p>
-        ) : !filtered.length ? (
-          <p className="empty">No wire matches “{query}”. Try a device name or a port number.</p>
-        ) : (
+        {(() => {
+          const onPage = filtered.filter((w) => stageOf(w) === (page === "schematic" ? "schematic" : "physical"));
+          const pool = page === "schematic" ? schematic : physical;
+          if (sync.state === "loading") return <p className="empty">Loading the manifest…</p>;
+          if (!pool.length) return (
+            <p className="empty">
+              {page === "schematic"
+                ? "No wires waiting. Anything you add as a schematic wire shows up here."
+                : "Nothing on the robot yet. Check wires off the schematic list as you run them."}
+            </p>
+          );
+          if (!onPage.length) return (
+            <p className="empty">No wire matches “{query}”. Try a device name or a port number.</p>
+          );
+          return (
           <>
-            <p className="count">{filtered.length} of {wires.length} {wires.length === 1 ? "wire" : "wires"}</p>
+            <p className="count">{onPage.length} of {pool.length} {pool.length === 1 ? "wire" : "wires"}</p>
             <ul className="list">
-              {filtered.map((w) => {
+              {onPage.map((w) => {
                 const t = T[w.type];
                 const open = openId === w.id;
                 return (
                   <li key={w.id} className={"item" + (open ? " item-open" : "")} style={{ "--c": t.color }}>
+                    {page === "schematic" && (
+                      <label className="check" title="Mark this wire as run on the robot">
+                        <input type="checkbox" checked={false}
+                          onChange={() => setStage(w, "physical")} />
+                        <span className="sr">Mark {w.name} as run</span>
+                      </label>
+                    )}
                     <button className="item-top" aria-expanded={open}
                       onClick={() => setOpenId(open ? null : w.id)}>
                       <span className="item-name">{mark(w.name, query)}</span>
@@ -405,6 +473,11 @@ export default function WireManifest() {
                         </dl>
                         <div className="detail-btns">
                           <button className="btn btn-sm" onClick={() => edit(w)}>Edit</button>
+                          {page === "manifest" && (
+                            <button className="btn btn-sm" onClick={() => setStage(w, "schematic")}>
+                              Back to schematic
+                            </button>
+                          )}
                           <button className="btn btn-sm btn-del" onClick={() => remove(w.id)}>Delete</button>
                         </div>
                       </div>
@@ -414,8 +487,10 @@ export default function WireManifest() {
               })}
             </ul>
           </>
-        )}
+          );
+        })()}
       </section>
+      )}
 
       <footer className="foot">
         Saved on this device. Back up and share the file so the whole subteam works off one manifest.
@@ -456,6 +531,34 @@ const CSS = `
 .eyebrow{font:600 11px/1 'IBM Plex Mono',monospace;letter-spacing:.14em;text-transform:uppercase;
   color:var(--ink-2);margin-bottom:6px}
 .masthead h1{font-weight:800;font-size:clamp(28px,7vw,40px);letter-spacing:-.02em;margin:0;line-height:.95}
+.tabs{max-width:820px;margin:0 auto 14px;display:flex;gap:4px;border-bottom:1px solid var(--line)}
+.tab{background:none;border:none;border-bottom:2px solid transparent;padding:9px 14px;margin-bottom:-1px;
+  font:600 13px 'Archivo',sans-serif;color:var(--ink-2);cursor:pointer;display:flex;align-items:center;gap:7px}
+.tab:hover{color:var(--ink)}
+.tab-on{color:var(--ink);border-bottom-color:var(--ink)}
+.tab-n{font:600 11px 'IBM Plex Mono',monospace;background:var(--line);color:var(--ink);
+  border-radius:999px;padding:1px 7px}
+.tab-on .tab-n{background:var(--ink);color:#fff}
+
+.stage-pick{display:flex;gap:6px;margin-bottom:14px}
+.stage-btn{flex:1;background:#fff;border:1px solid var(--line);border-radius:3px;padding:9px 12px;
+  font:500 13px 'Archivo',sans-serif;color:var(--ink-2);cursor:pointer}
+.stage-btn:hover{border-color:var(--ink-2)}
+.stage-on{color:var(--ink);border-color:var(--ink);box-shadow:inset 0 0 0 1px var(--ink)}
+
+.progress{margin-bottom:14px}
+.progress-bar{height:6px;background:var(--line);border-radius:3px;overflow:hidden}
+.progress-bar span{display:block;height:100%;background:#2E9E6B;transition:width .3s ease}
+.progress-txt{font:500 11px 'IBM Plex Mono',monospace;letter-spacing:.06em;text-transform:uppercase;
+  color:var(--ink-2);margin:7px 0 0}
+
+.item{display:flex;align-items:stretch;flex-wrap:wrap}
+.item>.item-top{flex:1;min-width:0}
+.item>.detail{flex-basis:100%}
+.check{display:flex;align-items:center;padding:0 4px 0 12px;cursor:pointer;flex-shrink:0}
+.check input{width:20px;height:20px;accent-color:#2E9E6B;cursor:pointer;margin:0}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+
 .syncbar{max-width:820px;margin:0 auto 14px;display:flex;align-items:center;gap:8px;
   font:500 12px 'IBM Plex Mono',monospace;color:var(--ink-2)}
 .pip{width:8px;height:8px;border-radius:50%;flex-shrink:0;background:#A5ADB6}
