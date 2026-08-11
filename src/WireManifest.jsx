@@ -369,7 +369,7 @@ export default function WireManifest() {
           ))}
         </div>
 
-        {loading ? (
+        {sync.state === "loading" ? (
           <p className="empty">Loading the manifest…</p>
         ) : !wires.length ? (
           <p className="empty">Nothing logged yet. Start with the battery leads and work outward.</p>
