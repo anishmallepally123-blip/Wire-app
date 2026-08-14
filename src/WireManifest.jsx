@@ -1,5 +1,6 @@
 import { store } from "./store.js";
-import { callSheet } from "./sheet.js";
+import { callSheetRaw } from "./sheet.js";
+import LayoutTab from "./LayoutTab.jsx";
 import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
 
 /* ------------------------------------------------------------------ */
@@ -65,6 +66,7 @@ function plainName(w) {
 /* ------------------------------------------------------------------ */
 const KEY = "frc-wires:v3";
 const URL_KEY = "frc-sheet-url:v1";
+const LAYOUT_KEY = "frc-layout:v1";
 const POLL_MS = 20000;
 const blank = () => ({
   type: "PWR12", stage: "schematic", fromDevice: "", fromPort: "", toDevice: "",
@@ -79,6 +81,8 @@ export default function WireManifest() {
   const [form, setForm] = useState(blank());
   const [query, setQuery] = useState("");
   const [page, setPage] = useState("add");
+  const [layout, setLayout] = useState([]);
+  const [editLayout, setEditLayout] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [openId, setOpenId] = useState(null);
   const [notice, setNotice] = useState("");
@@ -93,13 +97,22 @@ export default function WireManifest() {
     try { await store.set(KEY, JSON.stringify(list)); } catch (e) {}
   }, []);
 
+  const cacheLayout = useCallback(async (items) => {
+    try { await store.set(LAYOUT_KEY, JSON.stringify(items)); } catch (e) {}
+  }, []);
+
   /* read the sheet — skipped while one of our own writes is in flight */
   const pull = useCallback(async (url) => {
     if (!url || busy.current) return;
     try {
-      const list = await callSheet(url, { action: "list" });
+      const res = await callSheetRaw(url, { action: "list" });
+      const list = Array.isArray(res) ? res : res.wires || [];
       setWires(list);
       cache(list);
+      if (!Array.isArray(res) && Array.isArray(res.layout)) {
+        setLayout(res.layout);
+        cacheLayout(res.layout);
+      }
       setSync({ state: "ok", msg: "Synced to the sheet" });
     } catch (e) {
       setSync({ state: "off", msg: "Can't reach the sheet — saving on this device" });
@@ -112,6 +125,10 @@ export default function WireManifest() {
       try {
         const c = await store.get(KEY);
         if (c && c.value) setWires(JSON.parse(c.value));
+      } catch (e) {}
+      try {
+        const l = await store.get(LAYOUT_KEY);
+        if (l && l.value) setLayout(JSON.parse(l.value));
       } catch (e) {}
       let url = "";
       try {
@@ -138,9 +155,14 @@ export default function WireManifest() {
     busy.current = true;
     setSync({ state: "busy", msg: "Saving to the sheet…" });
     try {
-      const list = await callSheet(sheetUrl, { action, ...payload });
+      const res = await callSheetRaw(sheetUrl, { action, ...payload });
+      const list = Array.isArray(res) ? res : res.wires || [];
       setWires(list);
       cache(list);
+      if (!Array.isArray(res) && Array.isArray(res.layout)) {
+        setLayout(res.layout);
+        cacheLayout(res.layout);
+      }
       setSync({ state: "ok", msg: "Synced to the sheet" });
     } catch (e) {
       setSync({ state: "off", msg: "Saved here, but the sheet didn't take it" });
@@ -204,6 +226,22 @@ export default function WireManifest() {
     setOpenId(null);
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
+  function saveLayoutItem(item) {
+    const next = layout.some((i) => i.id === item.id)
+      ? layout.map((i) => (i.id === item.id ? item : i))
+      : [...layout, item];
+    setLayout(next);
+    cacheLayout(next);
+    if (sheetUrl) push("layoutUpsert", { item }, wires);
+  }
+
+  function deleteLayoutItem(id) {
+    const next = layout.filter((i) => i.id !== id);
+    setLayout(next);
+    cacheLayout(next);
+    if (sheetUrl) push("layoutDelete", { id }, wires);
+  }
+
   function setStage(w, stage) {
     const entry = { ...w, stage };
     push("upsert", { wire: entry }, wires.map((x) => (x.id === w.id ? entry : x)));
@@ -293,6 +331,7 @@ export default function WireManifest() {
           ["add", "Add wire", null],
           ["schematic", "Schematic", schematic.length],
           ["manifest", "On the robot", physical.length],
+          ["layout", "Belly pan", null],
         ].map(([id, label, n]) => (
           <button key={id} role="tab" aria-selected={page === id}
             className={"tab" + (page === id ? " tab-on" : "")}
@@ -383,7 +422,20 @@ export default function WireManifest() {
       </section>
       )}
 
-      {page !== "add" && (
+      {page === "layout" && (
+        <LayoutTab
+          layout={layout}
+          wires={physical.length ? physical : wires}
+          T={T}
+          editing={editLayout}
+          setEditing={setEditLayout}
+          onSave={saveLayoutItem}
+          onDelete={deleteLayoutItem}
+          sheetUrl={sheetUrl}
+        />
+      )}
+
+      {(page === "schematic" || page === "manifest") && (
       <section className="panel">
         <h2 className="panel-h">
           {page === "schematic" ? "Schematic manifest" : "On the robot"}
@@ -531,6 +583,27 @@ const CSS = `
 .eyebrow{font:600 11px/1 'IBM Plex Mono',monospace;letter-spacing:.14em;text-transform:uppercase;
   color:var(--ink-2);margin-bottom:6px}
 .masthead h1{font-weight:800;font-size:clamp(28px,7vw,40px);letter-spacing:-.02em;margin:0;line-height:.95}
+.pan{width:100%;height:auto;display:block;background:#fff;border:1px solid var(--line);
+  border-radius:3px;touch-action:none;user-select:none}
+.pan-edit{border-color:var(--ink);border-style:dashed}
+.panbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px}
+.panhint{flex:1;min-width:140px;font:500 11px 'IBM Plex Mono',monospace;letter-spacing:.06em;
+  text-transform:uppercase;color:var(--ink-2)}
+.sizer{display:flex;gap:4px}
+.sizer .btn{padding:6px 9px;font-family:'IBM Plex Mono',monospace;font-size:11px}
+.disclaimer{font:400 12px/1.5 'Archivo',sans-serif;color:var(--ink-2);margin:12px 0 0;
+  padding-top:10px;border-top:1px dashed var(--line)}
+.palette{background:var(--paper);border:1px solid var(--line);border-radius:3px;
+  padding:12px 14px;margin-bottom:14px}
+.palette-h{font:600 11px 'IBM Plex Mono',monospace;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--ink-2);margin:0 0 7px}
+.palette-h + .palette-row{margin-bottom:12px}
+.palette-row{display:flex;flex-wrap:wrap;gap:6px}
+.palette-row:last-child{margin-bottom:0}
+.pbtn{background:#fff;border:1px solid var(--line);border-radius:999px;padding:6px 12px;
+  font:500 13px 'Archivo',sans-serif;color:var(--ink);cursor:pointer}
+.pbtn:hover{border-color:var(--ink)}
+
 .tabs{max-width:820px;margin:0 auto 14px;display:flex;gap:4px;border-bottom:1px solid var(--line)}
 .tab{background:none;border:none;border-bottom:2px solid transparent;padding:9px 14px;margin-bottom:-1px;
   font:600 13px 'Archivo',sans-serif;color:var(--ink-2);cursor:pointer;display:flex;align-items:center;gap:7px}
