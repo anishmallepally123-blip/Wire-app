@@ -19,14 +19,45 @@ export const PARTS = [
 const CELL = 22;
 
 export default function LayoutTab({
-  layout, wires, T, editing, setEditing, onSave, onDelete, sheetUrl,
+  layout, wires, T, editing, setEditing, onCommit, sheetUrl, saving,
 }) {
   const [sel, setSel] = useState(null);
   const [palette, setPalette] = useState(false);
   const [drag, setDrag] = useState(null);
+  /* While editing, everything happens in this local draft. Nothing reaches
+     the sheet until Done editing, so a drag session is one write, not fifty. */
+  const [draft, setDraft] = useState(null);
   const svgRef = useRef(null);
 
-  const items = layout || [];
+  const items = draft || layout || [];
+  const dirty = draft !== null && JSON.stringify(draft) !== JSON.stringify(layout || []);
+
+  function startEdit() {
+    setDraft(layout ? layout.map((i) => ({ ...i })) : []);
+    setEditing(true);
+    setSel(null);
+  }
+  function finishEdit() {
+    if (draft && dirty) onCommit(draft);
+    setDraft(null);
+    setEditing(false);
+    setSel(null);
+    setPalette(false);
+  }
+  function cancelEdit() {
+    setDraft(null);
+    setEditing(false);
+    setSel(null);
+    setPalette(false);
+  }
+  const put = (item) =>
+    setDraft((d) => {
+      const base = d || [];
+      return base.some((i) => i.id === item.id)
+        ? base.map((i) => (i.id === item.id ? item : i))
+        : [...base, item];
+    });
+  const drop = (id) => setDraft((d) => (d || []).filter((i) => i.id !== id));
   const comps = useMemo(() => items.filter((i) => i.kind === "component"), [items]);
   const grid = useMemo(() => buildGrid(items), [items]);
 
@@ -84,7 +115,7 @@ export default function LayoutTab({
   }
   function up() {
     if (!drag) return;
-    if (drag.moved) onSave(drag.item);   /* one write per drop, not per pixel */
+    if (drag.moved) put(drag.item);
     setDrag(null);
   }
 
@@ -92,7 +123,7 @@ export default function LayoutTab({
 
   function add(part) {
     const spot = freeSpot(items, part.w, part.h);
-    onSave({
+    put({
       id: `c${Date.now()}${Math.floor(Math.random() * 100)}`,
       kind: "component", compId: part.id, label: part.label,
       x: spot.x, y: spot.y, w: part.w, h: part.h,
@@ -102,7 +133,7 @@ export default function LayoutTab({
   function addBlock(kind) {
     const size = kind === "grommet" ? { w: 1, h: 1 } : { w: 2, h: 6 };
     const spot = freeSpot(items, size.w, size.h);
-    onSave({
+    put({
       id: `${kind[0]}${Date.now()}${Math.floor(Math.random() * 100)}`,
       kind, compId: "", label: kind === "grommet" ? "Grommet" : "Obstacle",
       x: spot.x, y: spot.y, ...size,
@@ -117,14 +148,16 @@ export default function LayoutTab({
       <div className="panel-head">
         <h2 className="panel-h">Belly pan</h2>
         <div className="tools">
-          <button className={"btn btn-sm" + (editing ? " btn-go" : "")}
-            onClick={() => { setEditing(!editing); setSel(null); setPalette(false); }}>
-            {editing ? "Done editing" : "Edit layout"}
-          </button>
-          {editing && (
-            <button className="btn btn-sm" onClick={() => setPalette((p) => !p)}>
-              Add…
-            </button>
+          {editing ? (
+            <>
+              <button className="btn btn-sm" onClick={() => setPalette((p) => !p)}>Add…</button>
+              <button className="btn btn-sm" onClick={cancelEdit}>Cancel</button>
+              <button className="btn btn-sm btn-go" onClick={finishEdit} disabled={saving}>
+                {saving ? "Saving…" : dirty ? "Done — save" : "Done"}
+              </button>
+            </>
+          ) : (
+            <button className="btn btn-sm" onClick={startEdit}>Edit layout</button>
           )}
         </div>
       </div>
@@ -217,20 +250,22 @@ export default function LayoutTab({
           {editing ? (
             <div className="panbar">
               <span className="panhint">
-                {selected ? `${selected.label} selected — drag to move` : "Drag anything to move it"}
+                {selected
+                  ? `${selected.label} selected — drag to move`
+                  : dirty ? "Unsaved changes — hit Done to save" : "Drag anything to move it"}
               </span>
               {selected && (
                 <>
                   {selected.kind !== "grommet" && (
                     <span className="sizer">
-                      <button className="btn btn-sm" onClick={() => resize(selected, -1, 0, onSave)}>–W</button>
-                      <button className="btn btn-sm" onClick={() => resize(selected, 1, 0, onSave)}>+W</button>
-                      <button className="btn btn-sm" onClick={() => resize(selected, 0, -1, onSave)}>–H</button>
-                      <button className="btn btn-sm" onClick={() => resize(selected, 0, 1, onSave)}>+H</button>
+                      <button className="btn btn-sm" onClick={() => resize(selected, -1, 0, put)}>–W</button>
+                      <button className="btn btn-sm" onClick={() => resize(selected, 1, 0, put)}>+W</button>
+                      <button className="btn btn-sm" onClick={() => resize(selected, 0, -1, put)}>–H</button>
+                      <button className="btn btn-sm" onClick={() => resize(selected, 0, 1, put)}>+H</button>
                     </span>
                   )}
                   <button className="btn btn-sm btn-del"
-                    onClick={() => { onDelete(selected.id); setSel(null); }}>
+                    onClick={() => { drop(selected.id); setSel(null); }}>
                     Remove
                   </button>
                 </>
@@ -262,10 +297,10 @@ export default function LayoutTab({
 /* ------------------------------ helpers ------------------------------ */
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
-function resize(item, dw, dh, onSave) {
+function resize(item, dw, dh, put) {
   const w = clamp(item.w + dw, 1, COLS - item.x);
   const h = clamp(item.h + dh, 1, ROWS - item.y);
-  if (w !== item.w || h !== item.h) onSave({ ...item, w, h });
+  if (w !== item.w || h !== item.h) put({ ...item, w, h });
 }
 
 /* Drop new items somewhere empty rather than stacked on the origin. */
