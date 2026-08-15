@@ -236,20 +236,34 @@ export default function WireManifest() {
     setOpenId(null);
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
-  function saveLayoutItem(item) {
-    const next = layout.some((i) => i.id === item.id)
-      ? layout.map((i) => (i.id === item.id ? item : i))
-      : [...layout, item];
-    setLayout(next);
-    cacheLayout(next);
-    if (sheetUrl) push("layoutUpsert", { item }, wires);
-  }
+  const [savingLayout, setSavingLayout] = useState(false);
 
-  function deleteLayoutItem(id) {
-    const next = layout.filter((i) => i.id !== id);
-    setLayout(next);
-    cacheLayout(next);
-    if (sheetUrl) push("layoutDelete", { id }, wires);
+  /* One write for the whole editing session. The sheet's Layout tab is
+     replaced wholesale, which is safe because editing is an explicit mode. */
+  async function commitLayout(items) {
+    setLayout(items);
+    cacheLayout(items);
+    if (!sheetUrl) return;
+    setSavingLayout(true);
+    busy.current = true;
+    setSync({ state: "busy", msg: "Saving the layout…" });
+    try {
+      const res = await callSheetRaw(sheetUrl, { action: "layoutSave", layout: items });
+      if (Array.isArray(res.layout)) {
+        setLayout(res.layout);
+        cacheLayout(res.layout);
+      }
+      if (Array.isArray(res.wires)) {
+        setWires(res.wires);
+        cache(res.wires);
+      }
+      setSync({ state: "ok", msg: "Synced to the sheet" });
+    } catch (e) {
+      setSync({ state: "off", msg: `Layout not saved: ${e.message || e}` });
+    } finally {
+      setSavingLayout(false);
+      busy.current = false;
+    }
   }
 
   function setStage(w, stage) {
@@ -439,9 +453,9 @@ export default function WireManifest() {
           T={T}
           editing={editLayout}
           setEditing={setEditLayout}
-          onSave={saveLayoutItem}
-          onDelete={deleteLayoutItem}
+          onCommit={commitLayout}
           sheetUrl={sheetUrl}
+          saving={savingLayout}
         />
       )}
 
