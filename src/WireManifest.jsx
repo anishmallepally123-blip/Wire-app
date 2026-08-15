@@ -1,6 +1,7 @@
 import { store } from "./store.js";
 import { callSheetRaw } from "./sheet.js";
 import LayoutTab from "./LayoutTab.jsx";
+import { findConflicts } from "./conflicts.js";
 import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
 
 /* ------------------------------------------------------------------ */
@@ -206,6 +207,8 @@ export default function WireManifest() {
 
   const schematic = useMemo(() => wires.filter((w) => stageOf(w) === "schematic"), [wires]);
   const physical = useMemo(() => wires.filter((w) => stageOf(w) === "physical"), [wires]);
+
+  const conflicts = useMemo(() => findConflicts(wires), [wires]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -498,6 +501,27 @@ export default function WireManifest() {
           ))}
         </div>
 
+        {conflicts.count > 0 && (
+          <details className="warn">
+            <summary>
+              {conflicts.count} {conflicts.count === 1 ? "conflict" : "conflicts"} to check
+            </summary>
+            <ul className="warn-list">
+              {conflicts.ports.map((c) => (
+                <li key={`${c.device}-${c.port}`}>
+                  <strong>{c.device} port {c.port}</strong> is claimed by{" "}
+                  {c.wires.map((w) => w.name).join(", ")}
+                </li>
+              ))}
+              {conflicts.dupes.map((g) => (
+                <li key={g.map((w) => w.id).join("-")}>
+                  <strong>Same run logged twice:</strong> {g.map((w) => w.name).join(", ")}
+                </li>
+              ))}
+            </ul>
+          </details>
+        )}
+
         {(() => {
           const onPage = filtered.filter((w) => stageOf(w) === (page === "schematic" ? "schematic" : "physical"));
           const pool = page === "schematic" ? schematic : physical;
@@ -530,7 +554,12 @@ export default function WireManifest() {
                     )}
                     <button className="item-top" aria-expanded={open}
                       onClick={() => setOpenId(open ? null : w.id)}>
-                      <span className="item-name">{mark(w.name, query)}</span>
+                      <span className="item-name">
+                        {mark(w.name, query)}
+                        {conflicts.flagged.has(w.id) && (
+                          <span className="flag" title={conflicts.flagged.get(w.id).join("; ")}>!</span>
+                        )}
+                      </span>
                       <span className="item-path">
                         {mark(w.fromPort ? `${w.fromDevice} ${w.fromPort}` : w.fromDevice, query)}
                         <span className="arrow">→</span>
@@ -542,6 +571,12 @@ export default function WireManifest() {
                       <div className="detail">
                         <dl>
                           <div><dt>Reads as</dt><dd>{plainName(w)}</dd></div>
+                          {conflicts.flagged.has(w.id) && (
+                            <div>
+                              <dt>Check</dt>
+                              <dd className="dd-warn">{conflicts.flagged.get(w.id).join("; ")}</dd>
+                            </div>
+                          )}
                           <div><dt>Starts</dt><dd>{w.fromDevice}{w.fromPort && `, port ${w.fromPort}`}</dd></div>
                           <div><dt>Ends</dt><dd>{w.toDevice}{w.toPort && `, port ${w.toPort}`}</dd></div>
                           <div><dt>Type</dt><dd><i className="swatch" style={{ background: t.color }} />{t.label}</dd></div>
@@ -627,6 +662,19 @@ const CSS = `
 .pbtn{background:#fff;border:1px solid var(--line);border-radius:999px;padding:6px 12px;
   font:500 13px 'Archivo',sans-serif;color:var(--ink);cursor:pointer}
 .pbtn:hover{border-color:var(--ink)}
+
+.warn{background:#FDF3E7;border:1px solid #E8B473;border-left:4px solid #C2352B;
+  border-radius:3px;padding:10px 12px;margin-bottom:12px}
+.warn summary{font:600 13px 'Archivo',sans-serif;color:#8A2B23;cursor:pointer;list-style:none}
+.warn summary::-webkit-details-marker{display:none}
+.warn summary::before{content:"▸ ";font-size:11px}
+.warn[open] summary::before{content:"▾ "}
+.warn-list{margin:9px 0 0;padding:0 0 0 18px;font:400 13px/1.6 'Archivo',sans-serif;color:var(--ink)}
+.warn-list strong{font-family:'IBM Plex Mono',monospace;font-size:12px}
+.flag{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;
+  margin-left:7px;border-radius:50%;background:#C2352B;color:#fff;
+  font:700 11px/1 'Archivo',sans-serif;vertical-align:1px}
+.dd-warn{color:#8A2B23}
 
 .tabs{max-width:820px;margin:0 auto 14px;display:flex;gap:4px;border-bottom:1px solid var(--line)}
 .tab{background:none;border:none;border-bottom:2px solid transparent;padding:9px 14px;margin-bottom:-1px;
