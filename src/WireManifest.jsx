@@ -109,9 +109,14 @@ export default function WireManifest() {
       const list = Array.isArray(res) ? res : res.wires || [];
       setWires(list);
       cache(list);
-      if (!Array.isArray(res) && Array.isArray(res.layout)) {
+      /* An empty layout coming back while we hold items locally means the
+         write didn't land — keep ours rather than blanking the pan. */
+      if (Array.isArray(res.layout) && (res.layout.length || !layout.length)) {
         setLayout(res.layout);
         cacheLayout(res.layout);
+      } else if (Array.isArray(res.layout) && !res.layout.length && layout.length) {
+        setSync({ state: "off", msg: "Layout didn't save — is the script redeployed?" });
+        return;
       }
       setSync({ state: "ok", msg: "Synced to the sheet" });
     } catch (e) {
@@ -159,13 +164,18 @@ export default function WireManifest() {
       const list = Array.isArray(res) ? res : res.wires || [];
       setWires(list);
       cache(list);
-      if (!Array.isArray(res) && Array.isArray(res.layout)) {
+      /* An empty layout coming back while we hold items locally means the
+         write didn't land — keep ours rather than blanking the pan. */
+      if (Array.isArray(res.layout) && (res.layout.length || !layout.length)) {
         setLayout(res.layout);
         cacheLayout(res.layout);
+      } else if (Array.isArray(res.layout) && !res.layout.length && layout.length) {
+        setSync({ state: "off", msg: "Layout didn't save — is the script redeployed?" });
+        return;
       }
       setSync({ state: "ok", msg: "Synced to the sheet" });
     } catch (e) {
-      setSync({ state: "off", msg: "Saved here, but the sheet didn't take it" });
+      setSync({ state: "off", msg: `Sheet error: ${e.message || e}` });
     } finally {
       busy.current = false;
     }
