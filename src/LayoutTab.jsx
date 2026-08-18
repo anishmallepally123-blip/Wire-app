@@ -1,20 +1,25 @@
 import React, { useState, useRef, useMemo, useCallback } from "react";
 import { COLS, ROWS, buildGrid, route, toSvgPath } from "./routing.js";
+import { abbrev } from "./naming.js";
 
 /* Parts the palette offers. `id` doubles as the abbreviation used in wire
    names, so a wire ending at "PDH" finds this box with no extra mapping. */
 export const PARTS = [
-  { id: "PDH",   label: "PDH",           w: 5, h: 4 },
-  { id: "MPM",   label: "MPM",           w: 4, h: 3 },
-  { id: "SYSCR", label: "Systemcore",    w: 5, h: 3 },
-  { id: "RIO",   label: "roboRIO",       w: 5, h: 3 },
-  { id: "BATT",  label: "Battery",       w: 6, h: 4 },
-  { id: "BRKR",  label: "Main breaker",  w: 3, h: 2 },
-  { id: "KRK60", label: "Kraken x60",    w: 4, h: 3 },
-  { id: "KRK44", label: "Kraken x44",    w: 3, h: 3 },
-  { id: "RDIO",  label: "Radio",         w: 4, h: 2 },
-  { id: "PH",    label: "Pneumatic hub", w: 4, h: 3 },
+  { id: "PDH",   label: "PDH",          w: 5, h: 4 },
+  { id: "MPM",   label: "MPM",          w: 4, h: 3 },
+  { id: "SYSCR", label: "Systemcore",   w: 5, h: 3 },
+  { id: "RIO",   label: "roboRIO",      w: 5, h: 3 },
+  { id: "BATT",  label: "Battery",      w: 6, h: 4 },
+  { id: "BRKR",  label: "Main breaker", w: 3, h: 2 },
+  { id: "RDIO",  label: "Radio",        w: 4, h: 2 },
+  { id: "VRM",   label: "VRM",          w: 3, h: 2 },
+  { id: "KRK60", label: "Kraken x60",   w: 4, h: 3 },
+  { id: "KRK44", label: "Kraken x44",   w: 3, h: 3 },
 ];
+
+/* Swerve corners, dropped in as a named pair so you don't rename eight boxes
+   by hand. Each becomes an ordinary component once placed. */
+export const CORNERS = ["FL", "FR", "BL", "BR"];
 
 const CELL = 22;
 
@@ -22,7 +27,6 @@ export default function LayoutTab({
   layout, wires, T, editing, setEditing, onCommit, sheetUrl, saving,
 }) {
   const [sel, setSel] = useState(null);
-  const [palette, setPalette] = useState(false);
   const [drag, setDrag] = useState(null);
   /* While editing, everything happens in this local draft. Nothing reaches
      the sheet until Done editing, so a drag session is one write, not fifty. */
@@ -42,13 +46,11 @@ export default function LayoutTab({
     setDraft(null);
     setEditing(false);
     setSel(null);
-    setPalette(false);
   }
   function cancelEdit() {
     setDraft(null);
     setEditing(false);
     setSel(null);
-    setPalette(false);
   }
   const put = (item) =>
     setDraft((d) => {
@@ -65,7 +67,7 @@ export default function LayoutTab({
      drivetrain simply has no box, and is counted rather than drawn. */
   const byId = useMemo(() => {
     const m = {};
-    comps.forEach((c) => { m[c.compId || c.id] = c; });
+    comps.forEach((c) => { m[c.compId || abbrev(c.label)] = c; });
     return m;
   }, [comps]);
 
@@ -74,8 +76,8 @@ export default function LayoutTab({
     let skipped = 0;
     const pairSeen = {};
     wires.forEach((w) => {
-      const a = byId[abbrevOf(w.fromDevice)];
-      const b = byId[abbrevOf(w.toDevice)];
+      const a = byId[abbrev(w.fromDevice)];
+      const b = byId[abbrev(w.toDevice)];
       if (!a || !b || a === b) { skipped++; return; }
       const key = [a.id, b.id].sort().join("|");
       const n = pairSeen[key] || 0;
@@ -123,13 +125,33 @@ export default function LayoutTab({
 
   function add(part) {
     const spot = freeSpot(items, part.w, part.h);
+    const label = uniqueLabel(items, part.label);
     put({
       id: `c${Date.now()}${Math.floor(Math.random() * 100)}`,
-      kind: "component", compId: part.id, label: part.label,
+      kind: "component", compId: abbrev(label), label,
       x: spot.x, y: spot.y, w: part.w, h: part.h,
     });
-    setPalette(false);
   }
+
+  /* The label is the device name wires refer to, so renaming a box to
+     "BL Azimuth" is what makes that name selectable in Add wire. */
+  function rename(item, label) {
+    put({ ...item, label, compId: abbrev(label) });
+  }
+  function addCorner(corner) {
+    let pool = items;
+    [`${corner} Drive`, `${corner} Azimuth`].forEach((label) => {
+      const spot = freeSpot(pool, 4, 3);
+      const it = {
+        id: `c${Date.now()}${Math.floor(Math.random() * 1000)}`,
+        kind: "component", compId: abbrev(label), label,
+        x: spot.x, y: spot.y, w: 4, h: 3,
+      };
+      pool = [...pool, it];
+      put(it);
+    });
+  }
+
   function addBlock(kind) {
     const size = kind === "grommet" ? { w: 1, h: 1 } : { w: 2, h: 6 };
     const spot = freeSpot(items, size.w, size.h);
@@ -138,7 +160,6 @@ export default function LayoutTab({
       kind, compId: "", label: kind === "grommet" ? "Grommet" : "Obstacle",
       x: spot.x, y: spot.y, ...size,
     });
-    setPalette(false);
   }
 
   const selected = items.find((i) => i.id === sel);
@@ -150,7 +171,12 @@ export default function LayoutTab({
         <div className="tools">
           {editing ? (
             <>
-              <button className="btn btn-sm" onClick={() => setPalette((p) => !p)}>Add…</button>
+              {selected && (
+                <button className="btn btn-sm btn-del"
+                  onClick={() => { drop(selected.id); setSel(null); }}>
+                  Remove {selected.kind === "component" ? "component" : selected.kind}
+                </button>
+              )}
               <button className="btn btn-sm" onClick={cancelEdit}>Cancel</button>
               <button className="btn btn-sm btn-go" onClick={finishEdit} disabled={saving}>
                 {saving ? "Saving…" : dirty ? "Done — save" : "Done"}
@@ -162,12 +188,20 @@ export default function LayoutTab({
         </div>
       </div>
 
-      {palette && (
+      {editing && (
         <div className="palette">
           <p className="palette-h">Components</p>
           <div className="palette-row">
             {PARTS.map((p) => (
               <button key={p.id} className="pbtn" onClick={() => add(p)}>{p.label}</button>
+            ))}
+          </div>
+          <p className="palette-h">Swerve corner</p>
+          <div className="palette-row">
+            {CORNERS.map((c) => (
+              <button key={c} className="pbtn" onClick={() => addCorner(c)}>
+                {c} drive + azimuth
+              </button>
             ))}
           </div>
           <p className="palette-h">Structure</p>
@@ -251,11 +285,17 @@ export default function LayoutTab({
             <div className="panbar">
               <span className="panhint">
                 {selected
-                  ? `${selected.label} selected — drag to move`
+                  ? `Drag to move${selected.kind === "component" ? ", or rename it" : ""}`
                   : dirty ? "Unsaved changes — hit Done to save" : "Drag anything to move it"}
               </span>
               {selected && (
                 <>
+                  {selected.kind === "component" && (
+                    <input className="renamer" value={selected.label}
+                      aria-label="Component name"
+                      placeholder="Name this component"
+                      onChange={(e) => rename(selected, e.target.value)} />
+                  )}
                   {selected.kind !== "grommet" && (
                     <span className="sizer">
                       <button className="btn btn-sm" onClick={() => resize(selected, -1, 0, put)}>–W</button>
@@ -264,10 +304,6 @@ export default function LayoutTab({
                       <button className="btn btn-sm" onClick={() => resize(selected, 0, 1, put)}>+H</button>
                     </span>
                   )}
-                  <button className="btn btn-sm btn-del"
-                    onClick={() => { drop(selected.id); setSel(null); }}>
-                    Remove
-                  </button>
                 </>
               )}
             </div>
@@ -303,6 +339,15 @@ function resize(item, dw, dh, put) {
   if (w !== item.w || h !== item.h) put({ ...item, w, h });
 }
 
+/* Two "Kraken x60" boxes would collide when matching wires, so number them. */
+function uniqueLabel(items, base) {
+  const taken = new Set(items.filter((i) => i.label).map((i) => i.label.toLowerCase()));
+  if (!taken.has(base.toLowerCase())) return base;
+  let n = 2;
+  while (taken.has(`${base} ${n}`.toLowerCase())) n++;
+  return `${base} ${n}`;
+}
+
 /* Drop new items somewhere empty rather than stacked on the origin. */
 function freeSpot(items, w, h) {
   const hit = (x, y) =>
@@ -311,19 +356,4 @@ function freeSpot(items, w, h) {
     for (let x = 1; x < COLS - w; x++) if (!hit(x, y)) return { x, y };
   }
   return { x: 1, y: 1 };
-}
-
-const ALIASES = {
-  ROBORIO: "RIO", "ROBO RIO": "RIO", SYSTEMCORE: "SYSCR", "SYSTEM CORE": "SYSCR",
-  BATTERY: "BATT", "MAIN BREAKER": "BRKR", BREAKER: "BRKR", "PNEUMATIC HUB": "PH",
-  RADIO: "RDIO", "KRAKEN X60": "KRK60", "KRAKEN X44": "KRK44", KRAKEN: "KRK60",
-};
-function abbrevOf(raw) {
-  const c = (raw || "").trim().toUpperCase().replace(/[^A-Z0-9 \-_/]/g, "");
-  if (!c) return "";
-  if (ALIASES[c]) return ALIASES[c];
-  const w = c.split(/[\s\-_/]+/).filter(Boolean);
-  if (w.length === 1) return w[0].slice(0, 6);
-  const j = w.join("");
-  return j.length <= 6 ? j : w.map((x) => (/^\d+$/.test(x) ? x : x[0])).join("").slice(0, 6);
 }
