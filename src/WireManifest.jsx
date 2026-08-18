@@ -2,6 +2,7 @@ import { store } from "./store.js";
 import { callSheetRaw } from "./sheet.js";
 import LayoutTab from "./LayoutTab.jsx";
 import { findConflicts } from "./conflicts.js";
+import { endpointCode } from "./naming.js";
 import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
 
 /* ------------------------------------------------------------------ */
@@ -16,40 +17,19 @@ const TYPES = [
 ];
 const T = Object.fromEntries(TYPES.map((t) => [t.id, t]));
 
-const DEVICES = [
-  "Battery", "Main Breaker", "PDH", "PDP", "roboRIO", "VRM", "RSL", "Radio",
-  "Pneumatic Hub", "Compressor", "Talon FX", "SPARK MAX", "Kraken X60", "NEO",
-  "Limelight", "Front Left Drive", "Front Right Drive", "Back Left Drive",
-  "Back Right Drive", "Intake", "Shooter", "Elevator", "Arm", "Wrist", "Climber",
+/* Just the fixed electronics. Everything mechanism-specific — drive motors,
+   azimuths, intakes — comes from whatever is named on the belly pan, so the
+   list stays short and matches the actual robot. */
+const BASE_DEVICES = [
+  "Battery", "Main Breaker", "PDH", "MPM", "Systemcore", "roboRIO",
+  "Radio", "VRM", "RSL",
 ];
 
-const ALIASES = {
-  ROBORIO: "RIO", BATTERY: "BATT", "MAIN BREAKER": "BRKR", "PNEUMATIC HUB": "PH",
-  COMPRESSOR: "COMP", "SPARK MAX": "SPRK", LIMELIGHT: "LL", "TALON FX": "TLN",
-  "KRAKEN X60": "KRKN", RADIO: "RDIO",
-};
 
 /* ---------------- naming: endpoints only, no type prefix ---------------- */
-function abbrev(raw) {
-  const c = (raw || "").trim().toUpperCase().replace(/[^A-Z0-9 \-_/]/g, "");
-  if (!c) return "";
-  if (ALIASES[c]) return ALIASES[c];
-  const w = c.split(/[\s\-_/]+/).filter(Boolean);
-  if (w.length === 1) return w[0].slice(0, 6);
-  const j = w.join("");
-  return j.length <= 6 ? j : w.map((x) => (/^\d+$/.test(x) ? x : x[0])).join("").slice(0, 6);
-}
-function port(raw) {
-  const c = (raw || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
-  return !c ? "" : /^\d+$/.test(c) ? c.padStart(2, "0") : c;
-}
-const endpoint = (d, p) => {
-  const a = abbrev(d), b = port(p);
-  return a && b ? a + b : a || b;
-};
 function buildName(f, wires, selfId) {
-  const a = endpoint(f.fromDevice, f.fromPort);
-  const b = endpoint(f.toDevice, f.toPort);
+  const a = endpointCode(f.fromDevice, f.fromPort);
+  const b = endpointCode(f.toDevice, f.toPort);
   if (!a || !b) return "";
   const base = `${a}-${b}`;
   const taken = new Set(wires.filter((w) => w.id !== selfId).map((w) => w.name.toUpperCase()));
@@ -210,6 +190,15 @@ export default function WireManifest() {
 
   const conflicts = useMemo(() => findConflicts(wires), [wires]);
 
+  /* Belly pan labels feed the autocomplete, so naming "BL Azimuth" on the pan
+     makes it selectable here without touching any code. */
+  const devices = useMemo(() => {
+    const fromPan = (layout || [])
+      .filter((i) => i.kind === "component" && i.label)
+      .map((i) => i.label.trim());
+    return [...new Set([...BASE_DEVICES, ...fromPan])];
+  }, [layout]);
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return wires;
@@ -237,6 +226,7 @@ export default function WireManifest() {
     setForm({ ...blank(), ...w, nameOverride: w.nameOverride || "" });
     setEditingId(w.id);
     setOpenId(null);
+    setPage("add");          /* the form lives on the Add wire tab */
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
   const [savingLayout, setSavingLayout] = useState(false);
@@ -419,7 +409,7 @@ export default function WireManifest() {
         </div>
 
         <datalist id="devices">
-          {DEVICES.map((d) => <option key={d} value={d} />)}
+          {devices.map((d) => <option key={d} value={d} />)}
         </datalist>
 
         <div className="label-stage">
@@ -662,6 +652,9 @@ const CSS = `
 .pbtn{background:#fff;border:1px solid var(--line);border-radius:999px;padding:6px 12px;
   font:500 13px 'Archivo',sans-serif;color:var(--ink);cursor:pointer}
 .pbtn:hover{border-color:var(--ink)}
+
+.renamer{flex:1;min-width:130px;max-width:220px;padding:6px 9px;
+  font:600 13px 'IBM Plex Mono',monospace}
 
 .warn{background:#FDF3E7;border:1px solid #E8B473;border-left:4px solid #C2352B;
   border-radius:3px;padding:10px 12px;margin-bottom:12px}
