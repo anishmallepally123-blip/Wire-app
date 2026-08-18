@@ -28,6 +28,7 @@ export default function LayoutTab({
 }) {
   const [sel, setSel] = useState(null);
   const [drag, setDrag] = useState(null);
+  const [tip, setTip] = useState(null);
   /* While editing, everything happens in this local draft. Nothing reaches
      the sheet until Done editing, so a drag session is one write, not fifty. */
   const [draft, setDraft] = useState(null);
@@ -84,10 +85,36 @@ export default function LayoutTab({
       pairSeen[key] = n + 1;
       const cells = route(a, b, grid);
       if (!cells) { skipped++; return; }
-      out.push({ w, cells, offset: (n % 3) * 2.6 - 2.6 });
+      const stage = w.stage === "schematic" ? "schematic" : "physical";
+      out.push({ w, cells, stage, offset: (n % 3) * 2.6 - 2.6 });
     });
-    return { out, skipped };
+
+    /* Index every cell a wire passes through, so hovering can report all the
+       wires under the cursor rather than just whichever drew last. */
+    const atCell = new Map();
+    out.forEach((r) => {
+      r.cells.forEach(([x, y]) => {
+        const k = `${x},${y}`;
+        if (!atCell.has(k)) atCell.set(k, []);
+        if (!atCell.get(k).includes(r)) atCell.get(k).push(r);
+      });
+    });
+    return { out, skipped, atCell };
   }, [wires, byId, grid]);
+
+  /* Wires under the cursor, checking a one-cell radius so thin lines are
+     still catchable with a mouse or a fingertip. */
+  const hoverAt = useCallback((cx, cy) => {
+    const found = [];
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        (routed.atCell.get(`${cx + dx},${cy + dy}`) || []).forEach((r) => {
+          if (!found.includes(r)) found.push(r);
+        });
+      }
+    }
+    return found;
+  }, [routed]);
 
   /* ---- dragging, pointer events so it works on phones ---- */
   const cellFromEvent = useCallback((e) => {
@@ -107,7 +134,23 @@ export default function LayoutTab({
     setSel(item.id);
     setDrag({ id: item.id, dx: c.x - item.x, dy: c.y - item.y, moved: false, item });
   }
+  function hover(e) {
+    if (editing || drag) { if (tip) setTip(null); return; }
+    const c = cellFromEvent(e);
+    const hits = hoverAt(c.x, c.y);
+    if (!hits.length) { if (tip) setTip(null); return; }
+    /* Flip the box toward whichever side has room, so it never spills out
+       of the pan. */
+    setTip({
+      x: c.x, y: c.y,
+      flipX: c.x > COLS * 0.55,
+      flipY: c.y > ROWS * 0.6,
+      wires: hits.map((r) => ({ name: r.w.name, stage: r.stage, color: T[r.w.type]?.color || "#59636E" })),
+    });
+  }
+
   function move(e) {
+    hover(e);
     if (!drag) return;
     const c = cellFromEvent(e);
     const nx = clamp(c.x - drag.dx, 0, COLS - drag.item.w);
@@ -219,9 +262,11 @@ export default function LayoutTab({
         </p>
       ) : (
         <>
+          <div className="pan-wrap">
           <svg ref={svgRef} className={"pan" + (editing ? " pan-edit" : "")}
             viewBox={`0 0 ${COLS * CELL} ${ROWS * CELL}`}
-            onPointerMove={move} onPointerUp={up} onPointerLeave={up}>
+            onPointerMove={move} onPointerUp={up}
+            onPointerLeave={() => { up(); setTip(null); }}>
             <defs>
               <pattern id="gp" width={CELL} height={CELL} patternUnits="userSpaceOnUse">
                 <path d={`M ${CELL} 0 L 0 0 0 ${CELL}`} fill="none"
@@ -243,11 +288,17 @@ export default function LayoutTab({
               );
             })}
 
-            {!editing && routed.out.map(({ w, cells, offset }) => (
-              <path key={w.id} d={toSvgPath(cells, CELL, offset)} fill="none"
-                stroke={T[w.type]?.color || "#59636E"} strokeWidth="2.6"
-                strokeLinecap="round" strokeLinejoin="round" opacity="0.9" />
-            ))}
+            {!editing && routed.out.map(({ w, cells, stage, offset }) => {
+              const lit = tip && tip.wires.some((t) => t.name === w.name);
+              return (
+                <path key={w.id} d={toSvgPath(cells, CELL, offset)} fill="none"
+                  stroke={T[w.type]?.color || "#59636E"}
+                  strokeWidth={lit ? 4.2 : 2.6}
+                  strokeDasharray={stage === "schematic" ? "5 4" : undefined}
+                  strokeLinecap="round" strokeLinejoin="round"
+                  opacity={tip ? (lit ? 1 : 0.28) : 0.9} />
+              );
+            })}
 
             {items.filter((i) => i.kind === "grommet").map((i) => {
               const it = shown(i);
@@ -281,6 +332,24 @@ export default function LayoutTab({
             })}
           </svg>
 
+          {tip && (
+            <div className="tip" style={{
+              left: `${((tip.x + (tip.flipX ? -0.5 : 1.5)) / COLS) * 100}%`,
+              top: `${((tip.y + (tip.flipY ? -0.5 : 1.5)) / ROWS) * 100}%`,
+              transform: `translate(${tip.flipX ? "-100%" : "0"}, ${tip.flipY ? "-100%" : "0"})`,
+            }}>
+              {tip.wires.map((t, i) => (
+                <div key={t.name} className="tip-row">
+                  {i > 0 && <span className="tip-sep" />}
+                  <span className="tip-dot" style={{ background: t.color }} />
+                  <span className="tip-name">{t.name}</span>
+                  <span className="tip-stage">{t.stage === "schematic" ? "planned" : "run"}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          </div>
+
           {editing ? (
             <div className="panbar">
               <span className="panhint">
@@ -312,6 +381,12 @@ export default function LayoutTab({
               <span className="panhint">
                 {routed.out.length} of {wires.length} wires routed
                 {routed.skipped > 0 && ` — ${routed.skipped} end off the drivetrain`}
+              </span>
+              <span className="key">
+                <span className="key-i"><svg width="26" height="4"><line x1="1" y1="2" x2="25" y2="2"
+                  stroke="#59636E" strokeWidth="2.6" strokeLinecap="round" /></svg>on the robot</span>
+                <span className="key-i"><svg width="26" height="4"><line x1="1" y1="2" x2="25" y2="2"
+                  stroke="#59636E" strokeWidth="2.6" strokeDasharray="5 4" strokeLinecap="round" /></svg>planned</span>
               </span>
             </div>
           )}
