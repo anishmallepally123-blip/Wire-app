@@ -442,7 +442,7 @@ export default function WireManifest() {
       {page === "layout" && (
         <LayoutTab
           layout={layout}
-          wires={physical.length ? physical : wires}
+          wires={wires}
           T={T}
           editing={editLayout}
           setEditing={setEditLayout}
@@ -632,6 +632,22 @@ const CSS = `
 .eyebrow{font:600 11px/1 'IBM Plex Mono',monospace;letter-spacing:.14em;text-transform:uppercase;
   color:var(--ink-2);margin-bottom:6px}
 .masthead h1{font-weight:800;font-size:clamp(28px,7vw,40px);letter-spacing:-.02em;margin:0;line-height:.95}
+.pan-wrap{position:relative}
+.tip{position:absolute;z-index:5;pointer-events:none;background:#161B22;color:#fff;
+  border-radius:4px;padding:7px 10px;box-shadow:0 3px 10px rgba(22,27,34,.28);
+  max-width:230px}
+.tip-row{display:flex;align-items:center;gap:7px;white-space:nowrap}
+.tip-sep{position:absolute;left:8px;right:8px;height:1px;background:rgba(255,255,255,.18);
+  margin-top:-5px}
+.tip-row + .tip-row{margin-top:7px;padding-top:6px}
+.tip-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.tip-name{font:600 12px 'IBM Plex Mono',monospace}
+.tip-stage{font:500 10px 'IBM Plex Mono',monospace;letter-spacing:.06em;
+  text-transform:uppercase;color:#A5ADB6;margin-left:auto;padding-left:8px}
+.key{display:flex;gap:14px;flex-wrap:wrap}
+.key-i{display:inline-flex;align-items:center;gap:6px;font:500 11px 'IBM Plex Mono',monospace;
+  letter-spacing:.05em;text-transform:uppercase;color:var(--ink-2)}
+
 .pan{width:100%;height:auto;display:block;background:#fff;border:1px solid var(--line);
   border-radius:3px;touch-action:none;user-select:none}
 .pan-edit{border-color:var(--ink);border-style:dashed}
