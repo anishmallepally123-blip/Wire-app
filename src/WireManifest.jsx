@@ -1,8 +1,9 @@
 import { store } from "./store.js";
 import { callSheetRaw } from "./sheet.js";
 import LayoutTab from "./LayoutTab.jsx";
+import { partFor, PARTS, inToCell } from "./parts.js";
 import { findConflicts } from "./conflicts.js";
-import { endpointCode } from "./naming.js";
+import { endpointCode, abbrev } from "./naming.js";
 import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
 
 /* ------------------------------------------------------------------ */
@@ -78,6 +79,28 @@ export default function WireManifest() {
     try { await store.set(KEY, JSON.stringify(list)); } catch (e) {}
   }, []);
 
+  /* Layouts saved before the pan was drawn to scale used a 32x24 grid and
+     had no partId. Rescale the positions and adopt the real part size, so a
+     team that already placed a pan doesn't lose it. */
+  const migrate = useCallback((items) => {
+    if (!items.some((i) => i.kind === "component" && !i.partId)) return items;
+    return items.map((i) => {
+      if (i.partId) return i;
+      const guess = Object.values(PARTS).find(
+        (p) => p.label.toLowerCase() === String(i.label || "").toLowerCase()
+      ) || (i.kind === "component" ? PARTS.KRK60 : null);
+      const x = Math.round(i.x * 3.5);
+      const y = Math.round(i.y * 4);
+      if (i.kind !== "component") {
+        return { ...i, x, y, w: Math.max(2, Math.round(i.w * 3.5)), h: Math.max(2, Math.round(i.h * 4)) };
+      }
+      return {
+        ...i, x, y, partId: guess.id,
+        w: inToCell(guess.w), h: inToCell(guess.h),
+      };
+    });
+  }, []);
+
   const cacheLayout = useCallback(async (items) => {
     try { await store.set(LAYOUT_KEY, JSON.stringify(items)); } catch (e) {}
   }, []);
@@ -93,8 +116,9 @@ export default function WireManifest() {
       /* An empty layout coming back while we hold items locally means the
          write didn't land — keep ours rather than blanking the pan. */
       if (Array.isArray(res.layout) && (res.layout.length || !layout.length)) {
-        setLayout(res.layout);
-        cacheLayout(res.layout);
+        const m = migrate(res.layout);
+        setLayout(m);
+        cacheLayout(m);
       } else if (Array.isArray(res.layout) && !res.layout.length && layout.length) {
         setSync({ state: "off", msg: "Layout didn't save — is the script redeployed?" });
         return;
@@ -114,7 +138,7 @@ export default function WireManifest() {
       } catch (e) {}
       try {
         const l = await store.get(LAYOUT_KEY);
-        if (l && l.value) setLayout(JSON.parse(l.value));
+        if (l && l.value) setLayout(migrate(JSON.parse(l.value)));
       } catch (e) {}
       let url = "";
       try {
@@ -148,8 +172,9 @@ export default function WireManifest() {
       /* An empty layout coming back while we hold items locally means the
          write didn't land — keep ours rather than blanking the pan. */
       if (Array.isArray(res.layout) && (res.layout.length || !layout.length)) {
-        setLayout(res.layout);
-        cacheLayout(res.layout);
+        const m = migrate(res.layout);
+        setLayout(m);
+        cacheLayout(m);
       } else if (Array.isArray(res.layout) && !res.layout.length && layout.length) {
         setSync({ state: "off", msg: "Layout didn't save — is the script redeployed?" });
         return;
@@ -192,6 +217,18 @@ export default function WireManifest() {
 
   /* Belly pan labels feed the autocomplete, so naming "BL Azimuth" on the pan
      makes it selectable here without touching any code. */
+  /* Ports offered for a device come from its part definition on the pan, so
+     nobody has to remember whether it's "4" or "Ch4". */
+  const portsFor = useCallback((deviceName) => {
+    const key = abbrev(deviceName);
+    const item = (layout || []).find(
+      (i) => i.kind === "component" && (i.compId || abbrev(i.label)) === key
+    );
+    if (!item) return [];
+    const part = partFor(item);
+    return part ? part.ports : [];
+  }, [layout]);
+
   const devices = useMemo(() => {
     const fromPan = (layout || [])
       .filter((i) => i.kind === "component" && i.label)
@@ -243,8 +280,9 @@ export default function WireManifest() {
     try {
       const res = await callSheetRaw(sheetUrl, { action: "layoutSave", layout: items });
       if (Array.isArray(res.layout)) {
-        setLayout(res.layout);
-        cacheLayout(res.layout);
+        const m = migrate(res.layout);
+        setLayout(m);
+        cacheLayout(m);
       }
       if (Array.isArray(res.wires)) {
         setWires(res.wires);
@@ -391,16 +429,26 @@ export default function WireManifest() {
               onChange={(e) => setForm({ ...form, fromDevice: e.target.value })} />
           </Field>
           <Field label="Port">
-            <input value={form.fromPort} placeholder="4"
+            <input list="fromPorts" value={form.fromPort} placeholder="4"
               onChange={(e) => setForm({ ...form, fromPort: e.target.value })} />
+            <datalist id="fromPorts">
+              {portsFor(form.fromDevice).map((p) => (
+                <option key={p.id} value={p.id}>{p.label}</option>
+              ))}
+            </datalist>
           </Field>
           <Field label="Ends at" hint="device">
             <input list="devices" value={form.toDevice} placeholder="Front Left Drive"
               onChange={(e) => setForm({ ...form, toDevice: e.target.value })} />
           </Field>
           <Field label="Port">
-            <input value={form.toPort} placeholder="—"
+            <input list="toPorts" value={form.toPort} placeholder="—"
               onChange={(e) => setForm({ ...form, toPort: e.target.value })} />
+            <datalist id="toPorts">
+              {portsFor(form.toDevice).map((p) => (
+                <option key={p.id} value={p.id}>{p.label}</option>
+              ))}
+            </datalist>
           </Field>
           <Field label="Notes" hint="optional" wide>
             <input value={form.notes} placeholder="Runs under the belly pan"
@@ -632,6 +680,9 @@ const CSS = `
 .eyebrow{font:600 11px/1 'IBM Plex Mono',monospace;letter-spacing:.14em;text-transform:uppercase;
   color:var(--ink-2);margin-bottom:6px}
 .masthead h1{font-weight:800;font-size:clamp(28px,7vw,40px);letter-spacing:-.02em;margin:0;line-height:.95}
+.pbtn em{font-style:normal;font-size:10px;color:var(--ink-2);margin-left:6px;
+  font-family:'IBM Plex Mono',monospace}
+
 .pan-wrap{position:relative}
 .tip{position:absolute;z-index:5;pointer-events:none;background:#161B22;color:#fff;
   border-radius:4px;padding:7px 10px;box-shadow:0 3px 10px rgba(22,27,34,.28);
