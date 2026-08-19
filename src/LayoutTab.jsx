@@ -1,113 +1,71 @@
 import React, { useState, useRef, useMemo, useCallback } from "react";
-import { COLS, ROWS, buildGrid, route, toSvgPath } from "./routing.js";
+import { COLS, ROWS, PAN_IN, buildGrid, routePorts, toSvgPath } from "./routing.js";
+import { CPI, PARTS, PART_LIST, PORT_KIND, inToCell, partFor } from "./parts.js";
 import { abbrev } from "./naming.js";
 
-/* Parts the palette offers. `id` doubles as the abbreviation used in wire
-   names, so a wire ending at "PDH" finds this box with no extra mapping. */
-export const PARTS = [
-  { id: "PDH",   label: "PDH",          w: 5, h: 4 },
-  { id: "MPM",   label: "MPM",          w: 4, h: 3 },
-  { id: "SYSCR", label: "Systemcore",   w: 5, h: 3 },
-  { id: "RIO",   label: "roboRIO",      w: 5, h: 3 },
-  { id: "BATT",  label: "Battery",      w: 6, h: 4 },
-  { id: "BRKR",  label: "Main breaker", w: 3, h: 2 },
-  { id: "RDIO",  label: "Radio",        w: 4, h: 2 },
-  { id: "VRM",   label: "VRM",          w: 3, h: 2 },
-  { id: "KRK60", label: "Kraken x60",   w: 4, h: 3 },
-  { id: "KRK44", label: "Kraken x44",   w: 3, h: 3 },
-];
-
-/* Swerve corners, dropped in as a named pair so you don't rename eight boxes
-   by hand. Each becomes an ordinary component once placed. */
+const CELL = 7;                       /* screen px per grid cell */
 export const CORNERS = ["FL", "FR", "BL", "BR"];
-
-const CELL = 22;
 
 export default function LayoutTab({
   layout, wires, T, editing, setEditing, onCommit, sheetUrl, saving,
 }) {
   const [sel, setSel] = useState(null);
+  const [draft, setDraft] = useState(null);
   const [drag, setDrag] = useState(null);
   const [tip, setTip] = useState(null);
-  /* While editing, everything happens in this local draft. Nothing reaches
-     the sheet until Done editing, so a drag session is one write, not fifty. */
-  const [draft, setDraft] = useState(null);
   const svgRef = useRef(null);
 
   const items = draft || layout || [];
   const dirty = draft !== null && JSON.stringify(draft) !== JSON.stringify(layout || []);
-
-  function startEdit() {
-    setDraft(layout ? layout.map((i) => ({ ...i })) : []);
-    setEditing(true);
-    setSel(null);
-  }
-  function finishEdit() {
-    if (draft && dirty) onCommit(draft);
-    setDraft(null);
-    setEditing(false);
-    setSel(null);
-  }
-  function cancelEdit() {
-    setDraft(null);
-    setEditing(false);
-    setSel(null);
-  }
-  const put = (item) =>
-    setDraft((d) => {
-      const base = d || [];
-      return base.some((i) => i.id === item.id)
-        ? base.map((i) => (i.id === item.id ? item : i))
-        : [...base, item];
-    });
-  const drop = (id) => setDraft((d) => (d || []).filter((i) => i.id !== id));
   const comps = useMemo(() => items.filter((i) => i.kind === "component"), [items]);
   const grid = useMemo(() => buildGrid(items), [items]);
 
-  /* Match each wire to two boxes on the pan. Anything ending above the
-     drivetrain simply has no box, and is counted rather than drawn. */
-  const byId = useMemo(() => {
+  const byName = useMemo(() => {
     const m = {};
     comps.forEach((c) => { m[c.compId || abbrev(c.label)] = c; });
     return m;
   }, [comps]);
 
+  /* Route every wire terminal-to-terminal. A wire only draws when both ends
+     resolve to a component AND a port on it — anything else is counted. */
   const routed = useMemo(() => {
     const out = [];
-    let skipped = 0;
+    let offPan = 0, noPort = 0;
     const pairSeen = {};
     wires.forEach((w) => {
-      const a = byId[abbrev(w.fromDevice)];
-      const b = byId[abbrev(w.toDevice)];
-      if (!a || !b || a === b) { skipped++; return; }
+      const a = byName[abbrev(w.fromDevice)];
+      const b = byName[abbrev(w.toDevice)];
+      if (!a || !b || a === b) { offPan++; return; }
+      const pa = findPort(a, w.fromPort);
+      const pb = findPort(b, w.toPort);
+      if (!pa || !pb) { noPort++; return; }
       const key = [a.id, b.id].sort().join("|");
       const n = pairSeen[key] || 0;
       pairSeen[key] = n + 1;
-      const cells = route(a, b, grid);
-      if (!cells) { skipped++; return; }
-      const stage = w.stage === "schematic" ? "schematic" : "physical";
-      out.push({ w, cells, stage, offset: (n % 3) * 2.6 - 2.6 });
+      const r = routePorts({ item: a, port: pa }, { item: b, port: pb }, grid);
+      if (!r) { offPan++; return; }
+      out.push({
+        w, route: r,
+        stage: w.stage === "schematic" ? "schematic" : "physical",
+        offset: ((n % 3) - 1) * 1.6,
+      });
     });
 
-    /* Index every cell a wire passes through, so hovering can report all the
-       wires under the cursor rather than just whichever drew last. */
     const atCell = new Map();
     out.forEach((r) => {
-      r.cells.forEach(([x, y]) => {
+      r.route.cells.forEach(([x, y]) => {
         const k = `${x},${y}`;
         if (!atCell.has(k)) atCell.set(k, []);
         if (!atCell.get(k).includes(r)) atCell.get(k).push(r);
       });
     });
-    return { out, skipped, atCell };
-  }, [wires, byId, grid]);
+    return { out, offPan, noPort, atCell };
+  }, [wires, byName, grid]);
 
-  /* Wires under the cursor, checking a one-cell radius so thin lines are
-     still catchable with a mouse or a fingertip. */
   const hoverAt = useCallback((cx, cy) => {
     const found = [];
-    for (let dy = -1; dy <= 1; dy++) {
-      for (let dx = -1; dx <= 1; dx++) {
+    for (let dy = -2; dy <= 2; dy++) {
+      for (let dx = -2; dx <= 2; dx++) {
         (routed.atCell.get(`${cx + dx},${cy + dy}`) || []).forEach((r) => {
           if (!found.includes(r)) found.push(r);
         });
@@ -116,10 +74,30 @@ export default function LayoutTab({
     return found;
   }, [routed]);
 
-  /* ---- dragging, pointer events so it works on phones ---- */
+  /* ------------------------------ editing ------------------------------ */
+  function startEdit() {
+    setDraft((layout || []).map((i) => ({ ...i })));
+    setEditing(true);
+    setSel(null);
+    setTip(null);
+  }
+  function finishEdit() {
+    if (draft && dirty) onCommit(draft);
+    setDraft(null); setEditing(false); setSel(null);
+  }
+  function cancelEdit() { setDraft(null); setEditing(false); setSel(null); }
+
+  const put = (item) => setDraft((d) => {
+    const base = d || [];
+    return base.some((i) => i.id === item.id)
+      ? base.map((i) => (i.id === item.id ? item : i))
+      : [...base, item];
+  });
+  const drop = (id) => setDraft((d) => (d || []).filter((i) => i.id !== id));
+
   const cellFromEvent = useCallback((e) => {
     const r = svgRef.current.getBoundingClientRect();
-    const scale = COLS * CELL / r.width;
+    const scale = (COLS * CELL) / r.width;
     return {
       x: Math.floor(((e.clientX - r.left) * scale) / CELL),
       y: Math.floor(((e.clientY - r.top) * scale) / CELL),
@@ -134,23 +112,8 @@ export default function LayoutTab({
     setSel(item.id);
     setDrag({ id: item.id, dx: c.x - item.x, dy: c.y - item.y, moved: false, item });
   }
-  function hover(e) {
-    if (editing || drag) { if (tip) setTip(null); return; }
-    const c = cellFromEvent(e);
-    const hits = hoverAt(c.x, c.y);
-    if (!hits.length) { if (tip) setTip(null); return; }
-    /* Flip the box toward whichever side has room, so it never spills out
-       of the pan. */
-    setTip({
-      x: c.x, y: c.y,
-      flipX: c.x > COLS * 0.55,
-      flipY: c.y > ROWS * 0.6,
-      wires: hits.map((r) => ({ name: r.w.name, stage: r.stage, color: T[r.w.type]?.color || "#59636E" })),
-    });
-  }
-
   function move(e) {
-    hover(e);
+    if (!editing && !drag) { hover(e); return; }
     if (!drag) return;
     const c = cellFromEvent(e);
     const nx = clamp(c.x - drag.dx, 0, COLS - drag.item.w);
@@ -163,47 +126,61 @@ export default function LayoutTab({
     if (drag.moved) put(drag.item);
     setDrag(null);
   }
-
-  const shown = (it) => (drag && drag.id === it.id ? drag.item : it);
-
-  function add(part) {
-    const spot = freeSpot(items, part.w, part.h);
-    const label = uniqueLabel(items, part.label);
-    put({
-      id: `c${Date.now()}${Math.floor(Math.random() * 100)}`,
-      kind: "component", compId: abbrev(label), label,
-      x: spot.x, y: spot.y, w: part.w, h: part.h,
+  function hover(e) {
+    const c = cellFromEvent(e);
+    const hits = hoverAt(c.x, c.y);
+    if (!hits.length) { if (tip) setTip(null); return; }
+    setTip({
+      x: c.x, y: c.y,
+      flipX: c.x > COLS * 0.55,
+      flipY: c.y > ROWS * 0.6,
+      wires: hits.map((r) => ({
+        name: r.w.name, stage: r.stage,
+        color: T[r.w.type]?.color || "#59636E",
+      })),
     });
   }
 
-  /* The label is the device name wires refer to, so renaming a box to
-     "BL Azimuth" is what makes that name selectable in Add wire. */
-  function rename(item, label) {
-    put({ ...item, label, compId: abbrev(label) });
+  const shown = (it) => (drag && drag.id === it.id ? drag.item : it);
+
+  function addPart(part) {
+    const w = inToCell(part.w), h = inToCell(part.h);
+    const spot = freeSpot(items, w, h);
+    const label = uniqueLabel(items, part.label);
+    put({
+      id: `c${Date.now()}${Math.floor(Math.random() * 1000)}`,
+      kind: "component", partId: part.id, compId: abbrev(label), label,
+      x: spot.x, y: spot.y, w, h,
+    });
   }
   function addCorner(corner) {
+    const part = PARTS.KRK60;
+    const w = inToCell(part.w), h = inToCell(part.h);
     let pool = items;
     [`${corner} Drive`, `${corner} Azimuth`].forEach((label) => {
-      const spot = freeSpot(pool, 4, 3);
+      const spot = freeSpot(pool, w, h);
       const it = {
-        id: `c${Date.now()}${Math.floor(Math.random() * 1000)}`,
-        kind: "component", compId: abbrev(label), label,
-        x: spot.x, y: spot.y, w: 4, h: 3,
+        id: `c${Date.now()}${Math.floor(Math.random() * 10000)}`,
+        kind: "component", partId: part.id, compId: abbrev(label), label,
+        x: spot.x, y: spot.y, w, h,
       };
       pool = [...pool, it];
       put(it);
     });
   }
-
   function addBlock(kind) {
-    const size = kind === "grommet" ? { w: 1, h: 1 } : { w: 2, h: 6 };
+    const size = kind === "grommet"
+      ? { w: inToCell(0.5), h: inToCell(0.5) }
+      : { w: inToCell(0.5), h: inToCell(6) };
     const spot = freeSpot(items, size.w, size.h);
     put({
-      id: `${kind[0]}${Date.now()}${Math.floor(Math.random() * 100)}`,
-      kind, compId: "", label: kind === "grommet" ? "Grommet" : "Obstacle",
+      id: `${kind[0]}${Date.now()}${Math.floor(Math.random() * 1000)}`,
+      kind, partId: "", compId: "",
+      label: kind === "grommet" ? "Grommet" : "Obstacle",
       x: spot.x, y: spot.y, ...size,
     });
   }
+  const rename = (item, label) => put({ ...item, label, compId: abbrev(label) });
 
   const selected = items.find((i) => i.id === sel);
 
@@ -235,8 +212,10 @@ export default function LayoutTab({
         <div className="palette">
           <p className="palette-h">Components</p>
           <div className="palette-row">
-            {PARTS.map((p) => (
-              <button key={p.id} className="pbtn" onClick={() => add(p)}>{p.label}</button>
+            {PART_LIST.map((p) => (
+              <button key={p.id} className="pbtn" onClick={() => addPart(p)}>
+                {p.label}<em>{p.w}″×{p.h}″</em>
+              </button>
             ))}
           </div>
           <p className="palette-h">Swerve corner</p>
@@ -257,143 +236,130 @@ export default function LayoutTab({
 
       {!items.length ? (
         <p className="empty">
-          Nothing placed yet. Hit <strong>Edit layout</strong>, then <strong>Add…</strong> to
-          drop in the PDH, battery, and anything else that lives on the drivetrain.
+          Nothing placed yet. Hit <strong>Edit layout</strong> and drop in the PDH,
+          battery, and anything else that lives on the drivetrain.
         </p>
       ) : (
         <>
           <div className="pan-wrap">
-          <svg ref={svgRef} className={"pan" + (editing ? " pan-edit" : "")}
-            viewBox={`0 0 ${COLS * CELL} ${ROWS * CELL}`}
-            onPointerMove={move} onPointerUp={up}
-            onPointerLeave={() => { up(); setTip(null); }}>
-            <defs>
-              <pattern id="gp" width={CELL} height={CELL} patternUnits="userSpaceOnUse">
-                <path d={`M ${CELL} 0 L 0 0 0 ${CELL}`} fill="none"
-                  stroke="#D3D8DE" strokeWidth="0.5" />
-              </pattern>
-            </defs>
-            <rect width={COLS * CELL} height={ROWS * CELL} fill="url(#gp)" />
-            <rect x="2" y="2" width={COLS * CELL - 4} height={ROWS * CELL - 4}
-              fill="none" stroke="#59636E" strokeWidth="2" rx="4" />
+            <svg ref={svgRef} className={"pan" + (editing ? " pan-edit" : "")}
+              viewBox={`0 0 ${COLS * CELL} ${ROWS * CELL}`}
+              onPointerMove={move} onPointerUp={up}
+              onPointerLeave={() => { up(); setTip(null); }}>
+              <defs>
+                <pattern id="inch" width={CPI * CELL} height={CPI * CELL} patternUnits="userSpaceOnUse">
+                  <path d={`M ${CPI * CELL} 0 L 0 0 0 ${CPI * CELL}`}
+                    fill="none" stroke="#D3D8DE" strokeWidth="0.6" />
+                </pattern>
+              </defs>
+              <rect width={COLS * CELL} height={ROWS * CELL} fill="url(#inch)" />
+              <rect x="2" y="2" width={COLS * CELL - 4} height={ROWS * CELL - 4}
+                fill="none" stroke="#59636E" strokeWidth="2" rx="4" />
 
-            {items.filter((i) => i.kind === "obstacle").map((i) => {
-              const it = shown(i);
-              return (
-                <rect key={i.id} x={it.x * CELL} y={it.y * CELL}
-                  width={it.w * CELL} height={it.h * CELL}
-                  fill="#59636E" opacity={sel === i.id ? 0.45 : 0.22}
-                  style={{ cursor: editing ? "move" : "default" }}
-                  onPointerDown={(e) => down(e, it)} />
-              );
-            })}
+              {items.filter((i) => i.kind === "obstacle").map((i) => {
+                const it = shown(i);
+                return (
+                  <rect key={i.id} x={it.x * CELL} y={it.y * CELL}
+                    width={it.w * CELL} height={it.h * CELL}
+                    fill="#59636E" opacity={sel === i.id ? 0.45 : 0.2}
+                    style={{ cursor: editing ? "move" : "default" }}
+                    onPointerDown={(e) => down(e, it)} />
+                );
+              })}
 
-            {!editing && routed.out.map(({ w, cells, stage, offset }) => {
-              const lit = tip && tip.wires.some((t) => t.name === w.name);
-              return (
-                <path key={w.id} d={toSvgPath(cells, CELL, offset)} fill="none"
-                  stroke={T[w.type]?.color || "#59636E"}
-                  strokeWidth={lit ? 4.2 : 2.6}
-                  strokeDasharray={stage === "schematic" ? "5 4" : undefined}
-                  strokeLinecap="round" strokeLinejoin="round"
-                  opacity={tip ? (lit ? 1 : 0.28) : 0.9} />
-              );
-            })}
+              {!editing && routed.out.map(({ w, route, stage, offset }) => {
+                const lit = tip && tip.wires.some((t) => t.name === w.name);
+                return (
+                  <path key={w.id} d={toSvgPath(route, CELL, offset)} fill="none"
+                    stroke={T[w.type]?.color || "#59636E"}
+                    strokeWidth={lit ? 3.4 : 2}
+                    strokeDasharray={stage === "schematic" ? "5 4" : undefined}
+                    strokeLinecap="round" strokeLinejoin="round"
+                    opacity={tip ? (lit ? 1 : 0.22) : 0.88} />
+                );
+              })}
 
-            {items.filter((i) => i.kind === "grommet").map((i) => {
-              const it = shown(i);
-              return (
-                <circle key={i.id} cx={it.x * CELL + CELL / 2} cy={it.y * CELL + CELL / 2}
-                  r={CELL * 0.34} fill="#fff"
-                  stroke={sel === i.id ? "#161B22" : "#59636E"}
-                  strokeWidth={sel === i.id ? 2.5 : 1.5}
-                  style={{ cursor: editing ? "move" : "default" }}
-                  onPointerDown={(e) => down(e, it)} />
-              );
-            })}
+              {items.filter((i) => i.kind === "grommet").map((i) => {
+                const it = shown(i);
+                return (
+                  <circle key={i.id} cx={(it.x + it.w / 2) * CELL} cy={(it.y + it.h / 2) * CELL}
+                    r={Math.max(3.5, (it.w * CELL) / 2)} fill="#fff"
+                    stroke={sel === i.id ? "#161B22" : "#59636E"}
+                    strokeWidth={sel === i.id ? 2.5 : 1.4}
+                    style={{ cursor: editing ? "move" : "default" }}
+                    onPointerDown={(e) => down(e, it)} />
+                );
+              })}
 
-            {comps.map((i) => {
-              const it = shown(i);
-              return (
-                <g key={i.id} style={{ cursor: editing ? "move" : "default" }}
-                  onPointerDown={(e) => down(e, it)}>
-                  <rect x={it.x * CELL} y={it.y * CELL}
-                    width={it.w * CELL} height={it.h * CELL} rx="3"
-                    fill="#fff" stroke={sel === i.id ? "#161B22" : "#59636E"}
-                    strokeWidth={sel === i.id ? 2.5 : 1.5} />
-                  <text x={it.x * CELL + (it.w * CELL) / 2}
-                    y={it.y * CELL + (it.h * CELL) / 2 + 4}
-                    textAnchor="middle" fontSize="11"
-                    fontFamily="'IBM Plex Mono', monospace" fill="#161B22">
-                    {it.label}
-                  </text>
-                </g>
-              );
-            })}
-          </svg>
-
-          {tip && (
-            <div className="tip" style={{
-              left: `${((tip.x + (tip.flipX ? -0.5 : 1.5)) / COLS) * 100}%`,
-              top: `${((tip.y + (tip.flipY ? -0.5 : 1.5)) / ROWS) * 100}%`,
-              transform: `translate(${tip.flipX ? "-100%" : "0"}, ${tip.flipY ? "-100%" : "0"})`,
-            }}>
-              {tip.wires.map((t, i) => (
-                <div key={t.name} className="tip-row">
-                  {i > 0 && <span className="tip-sep" />}
-                  <span className="tip-dot" style={{ background: t.color }} />
-                  <span className="tip-name">{t.name}</span>
-                  <span className="tip-stage">{t.stage === "schematic" ? "planned" : "run"}</span>
-                </div>
+              {comps.map((i) => (
+                <Footprint key={i.id} item={shown(i)} selected={sel === i.id}
+                  editing={editing} onDown={down} />
               ))}
-            </div>
-          )}
+            </svg>
+
+            {tip && (
+              <div className="tip" style={{
+                left: `${((tip.x + (tip.flipX ? -1 : 3)) / COLS) * 100}%`,
+                top: `${((tip.y + (tip.flipY ? -1 : 3)) / ROWS) * 100}%`,
+                transform: `translate(${tip.flipX ? "-100%" : "0"}, ${tip.flipY ? "-100%" : "0"})`,
+              }}>
+                {tip.wires.map((t, i) => (
+                  <div key={t.name} className="tip-row">
+                    {i > 0 && <span className="tip-sep" />}
+                    <span className="tip-dot" style={{ background: t.color }} />
+                    <span className="tip-name">{t.name}</span>
+                    <span className="tip-stage">{t.stage === "schematic" ? "planned" : "run"}</span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           {editing ? (
             <div className="panbar">
               <span className="panhint">
                 {selected
-                  ? `Drag to move${selected.kind === "component" ? ", or rename it" : ""}`
+                  ? (selected.kind === "component" ? "Rename or drag" : "Drag to move")
                   : dirty ? "Unsaved changes — hit Done to save" : "Drag anything to move it"}
               </span>
-              {selected && (
-                <>
-                  {selected.kind === "component" && (
-                    <input className="renamer" value={selected.label}
-                      aria-label="Component name"
-                      placeholder="Name this component"
-                      onChange={(e) => rename(selected, e.target.value)} />
-                  )}
-                  {selected.kind !== "grommet" && (
-                    <span className="sizer">
-                      <button className="btn btn-sm" onClick={() => resize(selected, -1, 0, put)}>–W</button>
-                      <button className="btn btn-sm" onClick={() => resize(selected, 1, 0, put)}>+W</button>
-                      <button className="btn btn-sm" onClick={() => resize(selected, 0, -1, put)}>–H</button>
-                      <button className="btn btn-sm" onClick={() => resize(selected, 0, 1, put)}>+H</button>
-                    </span>
-                  )}
-                </>
+              {selected && selected.kind === "component" && (
+                <input className="renamer" value={selected.label} aria-label="Component name"
+                  placeholder="Name this component"
+                  onChange={(e) => rename(selected, e.target.value)} />
+              )}
+              {selected && selected.kind === "obstacle" && (
+                <span className="sizer">
+                  <button className="btn btn-sm" onClick={() => resize(selected, -CPI, 0, put)}>–W</button>
+                  <button className="btn btn-sm" onClick={() => resize(selected, CPI, 0, put)}>+W</button>
+                  <button className="btn btn-sm" onClick={() => resize(selected, 0, -CPI, put)}>–H</button>
+                  <button className="btn btn-sm" onClick={() => resize(selected, 0, CPI, put)}>+H</button>
+                </span>
               )}
             </div>
           ) : (
             <div className="panbar">
               <span className="panhint">
-                {routed.out.length} of {wires.length} wires routed
-                {routed.skipped > 0 && ` — ${routed.skipped} end off the drivetrain`}
+                {routed.out.length} of {wires.length} routed
+                {routed.noPort > 0 && ` — ${routed.noPort} missing a port`}
+                {routed.offPan > 0 && ` — ${routed.offPan} off the pan`}
               </span>
               <span className="key">
-                <span className="key-i"><svg width="26" height="4"><line x1="1" y1="2" x2="25" y2="2"
-                  stroke="#59636E" strokeWidth="2.6" strokeLinecap="round" /></svg>on the robot</span>
-                <span className="key-i"><svg width="26" height="4"><line x1="1" y1="2" x2="25" y2="2"
-                  stroke="#59636E" strokeWidth="2.6" strokeDasharray="5 4" strokeLinecap="round" /></svg>planned</span>
+                <span className="key-i">
+                  <svg width="24" height="4"><line x1="1" y1="2" x2="23" y2="2"
+                    stroke="#59636E" strokeWidth="2.4" strokeLinecap="round" /></svg>on robot
+                </span>
+                <span className="key-i">
+                  <svg width="24" height="4"><line x1="1" y1="2" x2="23" y2="2"
+                    stroke="#59636E" strokeWidth="2.4" strokeDasharray="5 4" strokeLinecap="round" /></svg>planned
+                </span>
               </span>
             </div>
           )}
 
           <p className="disclaimer">
-            Planning view. Routes are the shortest legal path on this model, not a
-            record of how the wire actually runs — don't trace from it in the pit.
+            Planning view, drawn to scale at {PAN_IN.w}″ × {PAN_IN.h}″. Routes are the
+            shortest legal path on this model, not a record of how the wire actually
+            runs — don't trace from it in the pit.
           </p>
         </>
       )}
@@ -405,16 +371,107 @@ export default function LayoutTab({
   );
 }
 
+/* ------------------------- footprint drawing ------------------------- */
+
+function Footprint({ item, selected, editing, onDown }) {
+  const part = partFor(item);
+  const x = item.x * CELL, y = item.y * CELL;
+  const w = item.w * CELL, h = item.h * CELL;
+  const stroke = selected ? "#161B22" : "#59636E";
+  const sw = selected ? 2.2 : 1.3;
+  const shape = part?.shape || "board";
+
+  return (
+    <g style={{ cursor: editing ? "move" : "default" }} onPointerDown={(e) => onDown(e, item)}>
+      {shape === "motor" ? (
+        <>
+          {/* round can, seen from above, with the output shaft boss */}
+          <circle cx={x + w / 2} cy={y + w / 2} r={w / 2 - 1}
+            fill="#F4F6F8" stroke={stroke} strokeWidth={sw} />
+          <circle cx={x + w / 2} cy={y + w / 2} r={w / 4}
+            fill="none" stroke="#A5ADB6" strokeWidth="1" />
+          <rect x={x + 2} y={y + w} width={w - 4} height={h - w} rx="2"
+            fill="#F4F6F8" stroke={stroke} strokeWidth={sw} />
+        </>
+      ) : shape === "battery" ? (
+        <>
+          <rect x={x} y={y} width={w} height={h} rx="2"
+            fill="#F4F6F8" stroke={stroke} strokeWidth={sw} />
+          <rect x={x + 3} y={y + 3} width={w - 6} height={h * 0.22} rx="1"
+            fill="#DDE2E8" stroke="none" />
+        </>
+      ) : shape === "breaker" ? (
+        <>
+          <rect x={x} y={y} width={w} height={h} rx="3"
+            fill="#F4F6F8" stroke={stroke} strokeWidth={sw} />
+          <circle cx={x + w / 2} cy={y + h / 2} r={Math.min(w, h) * 0.22}
+            fill="#C2352B" opacity="0.8" />
+        </>
+      ) : shape === "pdh" ? (
+        <>
+          <rect x={x} y={y} width={w} height={h} rx="2"
+            fill="#F4F6F8" stroke={stroke} strokeWidth={sw} />
+          {/* WAGO terminal blocks down both long sides */}
+          {[0, 1].map((row) =>
+            [...Array(10)].map((_, i) => (
+              <rect key={`${row}-${i}`}
+                x={x + (0.3 + i * 0.4) * CPI * CELL}
+                y={row ? y + h - 0.42 * CPI * CELL : y + 0.05 * CPI * CELL}
+                width={0.3 * CPI * CELL} height={0.37 * CPI * CELL} rx="1"
+                fill="#D9C27A" stroke="#A5ADB6" strokeWidth="0.4" />
+            ))
+          )}
+          {/* voltage display */}
+          <rect x={x + w * 0.3} y={y + h * 0.38} width={w * 0.34} height={h * 0.24}
+            rx="1" fill="#1B1B1B" />
+          <text x={x + w * 0.47} y={y + h * 0.55} textAnchor="middle"
+            fontSize={Math.min(9, h * 0.15)} fill="#7CE07C"
+            fontFamily="'IBM Plex Mono', monospace">12.4V</text>
+        </>
+      ) : (
+        <rect x={x} y={y} width={w} height={h} rx="2"
+          fill="#F4F6F8" stroke={stroke} strokeWidth={sw} />
+      )}
+
+      {/* ports */}
+      {(part?.ports || []).map((p) => (
+        <circle key={p.id}
+          cx={(item.x + p.x * CPI) * CELL} cy={(item.y + p.y * CPI) * CELL}
+          r="2.1" fill="#fff" stroke={PORT_KIND[p.kind] || "#59636E"} strokeWidth="1.3" />
+      ))}
+
+      <text x={x + w / 2} y={y + h + 9} textAnchor="middle"
+        fontSize="9" fontFamily="'IBM Plex Mono', monospace" fill="#161B22">
+        {item.label}
+      </text>
+    </g>
+  );
+}
+
 /* ------------------------------ helpers ------------------------------ */
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
+/* "4", "04", "Ch 4" and "PWM0" all have to find their terminal. */
+export function findPort(item, raw) {
+  const part = partFor(item);
+  if (!part) return null;
+  const want = String(raw || "").trim().toUpperCase().replace(/[^A-Z0-9+-]/g, "");
+  if (!want) return part.ports[0] || null;      /* unspecified: use the first */
+  const num = /^\d+$/.test(want) ? String(parseInt(want, 10)) : null;
+  return (
+    part.ports.find((p) => p.id.toUpperCase() === want) ||
+    (num && part.ports.find((p) => p.id === num)) ||
+    part.ports.find((p) => p.id.toUpperCase().replace(/[^A-Z0-9+-]/g, "") === want) ||
+    null
+  );
+}
+
 function resize(item, dw, dh, put) {
-  const w = clamp(item.w + dw, 1, COLS - item.x);
-  const h = clamp(item.h + dh, 1, ROWS - item.y);
+  const w = clamp(item.w + dw, CPI / 2, COLS - item.x);
+  const h = clamp(item.h + dh, CPI / 2, ROWS - item.y);
   if (w !== item.w || h !== item.h) put({ ...item, w, h });
 }
 
-/* Two "Kraken x60" boxes would collide when matching wires, so number them. */
 function uniqueLabel(items, base) {
   const taken = new Set(items.filter((i) => i.label).map((i) => i.label.toLowerCase()));
   if (!taken.has(base.toLowerCase())) return base;
@@ -423,12 +480,12 @@ function uniqueLabel(items, base) {
   return `${base} ${n}`;
 }
 
-/* Drop new items somewhere empty rather than stacked on the origin. */
 function freeSpot(items, w, h) {
   const hit = (x, y) =>
     items.some((i) => x < i.x + i.w && x + w > i.x && y < i.y + i.h && y + h > i.y);
-  for (let y = 1; y < ROWS - h; y++) {
-    for (let x = 1; x < COLS - w; x++) if (!hit(x, y)) return { x, y };
+  const step = Math.max(1, Math.round(CPI / 2));
+  for (let y = CPI; y < ROWS - h; y += step) {
+    for (let x = CPI; x < COLS - w; x += step) if (!hit(x, y)) return { x, y };
   }
-  return { x: 1, y: 1 };
+  return { x: CPI, y: CPI };
 }
