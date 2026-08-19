@@ -1,0 +1,166 @@
+/* Component library.
+ *
+ * Everything here is in INCHES. The grid is CPI cells per inch, so a part's
+ * cell footprint is derived, never hand-tuned — change CPI and the whole pan
+ * rescales correctly.
+ *
+ * Dimensions are close enough to plan a belly pan with, taken from vendor
+ * drawings and physical measurement. They are NOT a substitute for a CAD
+ * model. If a part is off, fix the numbers here: it's the only place they
+ * live, and the footprint, port positions, and routing all follow from them.
+ *
+ * Ports: x and y are offsets in inches from the part's top-left corner.
+ * `id` must match what people actually type in the Add wire form — the Add
+ * wire port dropdown is generated from these, which is what keeps them in
+ * step.
+ */
+
+export const CPI = 4;              /* cells per inch — see routing.js */
+export const inToCell = (n) => Math.round(n * CPI);
+
+/* ------------------------------------------------------------------ */
+
+const pdhPorts = () => {
+  const ports = [];
+  /* 20 high-current channels, 10 down each long side. REV numbers them
+     0-9 along one side and 10-19 along the other. */
+  for (let i = 0; i < 10; i++) {
+    ports.push({ id: String(i), label: String(i), x: 0.45 + i * 0.4, y: 0, edge: "top", kind: "power" });
+  }
+  for (let i = 0; i < 10; i++) {
+    ports.push({ id: String(i + 10), label: String(i + 10), x: 0.45 + i * 0.4, y: 3.5, edge: "bottom", kind: "power" });
+  }
+  /* 3 low-current + 1 switchable, plus battery and CAN */
+  ["20", "21", "22", "23"].forEach((n, i) => {
+    ports.push({ id: n, label: n, x: 4.4, y: 0.7 + i * 0.55, edge: "right", kind: "power" });
+  });
+  ports.push({ id: "BAT", label: "Battery", x: 0, y: 1.75, edge: "left", kind: "power" });
+  ports.push({ id: "CAN", label: "CAN", x: 4.4, y: 3.1, edge: "right", kind: "can" });
+  return ports;
+};
+
+export const PARTS = {
+  PDH: {
+    id: "PDH", label: "PDH", w: 4.4, h: 3.5, shape: "pdh",
+    ports: pdhPorts(),
+  },
+  MPM: {
+    id: "MPM", label: "MPM", w: 2.6, h: 1.7, shape: "board",
+    ports: [
+      ...[0, 1, 2, 3, 4, 5].map((i) => ({
+        id: String(i), label: String(i), x: 0.35 + i * 0.38, y: 0, edge: "top", kind: "power",
+      })),
+      { id: "IN", label: "Power in", x: 0, y: 0.85, edge: "left", kind: "power" },
+      { id: "CAN", label: "CAN", x: 2.6, y: 0.85, edge: "right", kind: "can" },
+    ],
+  },
+  SYSCR: {
+    id: "SYSCR", label: "Systemcore", w: 5.0, h: 3.5, shape: "board",
+    /* Systemcore is new — treat this port map as a starting point and
+       correct it against the unit on your bench. */
+    ports: [
+      { id: "PWR", label: "Power", x: 0, y: 1.0, edge: "left", kind: "power" },
+      { id: "CAN", label: "CAN", x: 0, y: 2.2, edge: "left", kind: "can" },
+      { id: "ETH", label: "Ethernet", x: 5.0, y: 0.9, edge: "right", kind: "eth" },
+      ...[0, 1, 2, 3].map((i) => ({
+        id: `PWM${i}`, label: `PWM ${i}`, x: 0.8 + i * 0.6, y: 3.5, edge: "bottom", kind: "pwm",
+      })),
+      ...[0, 1, 2, 3].map((i) => ({
+        id: `DIO${i}`, label: `DIO ${i}`, x: 3.3 + i * 0.4, y: 3.5, edge: "bottom", kind: "dio",
+      })),
+    ],
+  },
+  RIO: {
+    id: "RIO", label: "roboRIO", w: 6.2, h: 3.6, shape: "board",
+    ports: [
+      { id: "PWR", label: "Power", x: 0, y: 0.8, edge: "left", kind: "power" },
+      { id: "CAN", label: "CAN", x: 0, y: 2.0, edge: "left", kind: "can" },
+      { id: "ETH", label: "Ethernet", x: 6.2, y: 1.0, edge: "right", kind: "eth" },
+      ...[0, 1, 2, 3, 4, 5].map((i) => ({
+        id: `PWM${i}`, label: `PWM ${i}`, x: 0.7 + i * 0.45, y: 3.6, edge: "bottom", kind: "pwm",
+      })),
+      ...[0, 1, 2, 3].map((i) => ({
+        id: `DIO${i}`, label: `DIO ${i}`, x: 3.9 + i * 0.45, y: 3.6, edge: "bottom", kind: "dio",
+      })),
+    ],
+  },
+  BATT: {
+    id: "BATT", label: "Battery", w: 7.1, h: 3.0, shape: "battery",
+    ports: [
+      { id: "+", label: "+", x: 6.3, y: 0, edge: "top", kind: "power" },
+      { id: "-", label: "−", x: 0.8, y: 0, edge: "top", kind: "power" },
+    ],
+  },
+  BRKR: {
+    id: "BRKR", label: "Main breaker", w: 2.3, h: 1.7, shape: "breaker",
+    ports: [
+      { id: "BAT", label: "Battery", x: 0, y: 0.85, edge: "left", kind: "power" },
+      { id: "LOAD", label: "Load", x: 2.3, y: 0.85, edge: "right", kind: "power" },
+    ],
+  },
+  KRK60: {
+    id: "KRK60", label: "Kraken x60", w: 2.8, h: 3.9, shape: "motor",
+    ports: [
+      { id: "V+", label: "V+", x: 0.8, y: 3.9, edge: "bottom", kind: "power" },
+      { id: "V-", label: "V−", x: 1.5, y: 3.9, edge: "bottom", kind: "power" },
+      { id: "CAN", label: "CAN", x: 2.2, y: 3.9, edge: "bottom", kind: "can" },
+    ],
+  },
+  KRK44: {
+    id: "KRK44", label: "Kraken x44", w: 2.0, h: 3.2, shape: "motor",
+    ports: [
+      { id: "V+", label: "V+", x: 0.5, y: 3.2, edge: "bottom", kind: "power" },
+      { id: "V-", label: "V−", x: 1.0, y: 3.2, edge: "bottom", kind: "power" },
+      { id: "CAN", label: "CAN", x: 1.5, y: 3.2, edge: "bottom", kind: "can" },
+    ],
+  },
+  RDIO: {
+    id: "RDIO", label: "Radio", w: 4.6, h: 3.3, shape: "board",
+    ports: [
+      { id: "PWR", label: "Power", x: 0, y: 1.6, edge: "left", kind: "power" },
+      { id: "ETH", label: "Ethernet", x: 4.6, y: 1.6, edge: "right", kind: "eth" },
+    ],
+  },
+  VRM: {
+    id: "VRM", label: "VRM", w: 3.0, h: 2.0, shape: "board",
+    ports: [
+      { id: "IN", label: "Power in", x: 0, y: 1.0, edge: "left", kind: "power" },
+      { id: "12V", label: "12V", x: 3.0, y: 0.6, edge: "right", kind: "power" },
+      { id: "5V", label: "5V", x: 3.0, y: 1.4, edge: "right", kind: "power" },
+    ],
+  },
+  RSL: {
+    id: "RSL", label: "RSL", w: 1.6, h: 1.6, shape: "board",
+    ports: [{ id: "IN", label: "Signal", x: 0, y: 0.8, edge: "left", kind: "power" }],
+  },
+};
+
+export const PART_LIST = Object.values(PARTS);
+
+/* Colours for the little port dots, so a CAN terminal reads differently
+   from a 40A power channel at a glance. */
+export const PORT_KIND = {
+  power: "#C2352B",
+  can:   "#2E9E6B",
+  eth:   "#5B4B8A",
+  pwm:   "#2E6FC4",
+  dio:   "#0F8F94",
+};
+
+export function partFor(item) {
+  return PARTS[item.partId] || null;
+}
+
+/* Absolute cell position of a port, kept fractional so a dot can sit
+   between grid lines — adjacent PDH channels are 1.6 cells apart. */
+export function portPos(item, port) {
+  return {
+    x: item.x + port.x * CPI,
+    y: item.y + port.y * CPI,
+  };
+}
+
+export function portsOf(item) {
+  const p = partFor(item);
+  return p ? p.ports : [];
+}
