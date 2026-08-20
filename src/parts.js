@@ -22,51 +22,65 @@ export const inToCell = (n) => Math.round(n * CPI);
 
 const pdhPorts = () => {
   const ports = [];
-  /* 20 high-current channels, 10 down each long side. REV numbers them
-     0-9 along one side and 10-19 along the other. */
+  /* 20 high-current channels, 10 down each long side. Measured board is
+     8.875 x 4.375in, so the channels sit about 0.72in apart. */
   for (let i = 0; i < 10; i++) {
-    ports.push({ id: String(i), label: String(i), x: 0.45 + i * 0.4, y: 0, edge: "top", kind: "power" });
+    ports.push({ id: String(i), label: String(i), num: String(i),
+      x: 0, y: 0.85 + i * 0.72, edge: "left", kind: "power" });
   }
   for (let i = 0; i < 10; i++) {
-    ports.push({ id: String(i + 10), label: String(i + 10), x: 0.45 + i * 0.4, y: 3.5, edge: "bottom", kind: "power" });
+    ports.push({ id: String(i + 10), label: String(i + 10), num: String(i + 10),
+      x: 4.375, y: 0.85 + i * 0.72, edge: "right", kind: "power" });
   }
-  /* 3 low-current + 1 switchable, plus battery and CAN */
+  /* low-current channels and the battery/CAN end */
   ["20", "21", "22", "23"].forEach((n, i) => {
-    ports.push({ id: n, label: n, x: 4.4, y: 0.7 + i * 0.55, edge: "right", kind: "power" });
+    ports.push({ id: n, label: n, num: n,
+      x: 0.55 + i * 0.42, y: 8.875, edge: "bottom", kind: "power" });
   });
-  ports.push({ id: "BAT", label: "Battery", x: 0, y: 1.75, edge: "left", kind: "power" });
-  ports.push({ id: "CAN", label: "CAN", x: 4.4, y: 3.1, edge: "right", kind: "can" });
+  ports.push({ id: "BAT", label: "Battery in", x: 3.5, y: 8.875, edge: "bottom", kind: "power" });
+  ports.push({ id: "CAN", label: "CAN", x: 2.5, y: 8.875, edge: "bottom", kind: "can" });
   return ports;
 };
 
 export const PARTS = {
   PDH: {
-    id: "PDH", label: "PDH", w: 4.4, h: 3.5, shape: "pdh",
+    id: "PDH", label: "PDH", w: 4.375, h: 8.875, shape: "pdh",
     ports: pdhPorts(),
   },
   MPM: {
-    id: "MPM", label: "MPM", w: 2.6, h: 1.7, shape: "board",
+    id: "MPM", label: "MPM", w: 3.0, h: 2.0, shape: "board",
     ports: [
       ...[0, 1, 2, 3, 4, 5].map((i) => ({
-        id: String(i), label: String(i), x: 0.35 + i * 0.38, y: 0, edge: "top", kind: "power",
+        id: String(i), label: String(i), num: String(i),
+        x: 0, y: 0.3 + i * 0.28, edge: "left", kind: "power",
       })),
-      { id: "IN", label: "Power in", x: 0, y: 0.85, edge: "left", kind: "power" },
-      { id: "CAN", label: "CAN", x: 2.6, y: 0.85, edge: "right", kind: "can" },
+      { id: "BAT", label: "Battery in", x: 3.0, y: 1.0, edge: "right", kind: "power" },
     ],
   },
   SYSCR: {
-    id: "SYSCR", label: "Systemcore", w: 5.0, h: 3.5, shape: "board",
-    /* Systemcore is new — treat this port map as a starting point and
-       correct it against the unit on your bench. */
+    /* Limelight Systemcore. Roughly a large phone: 6.3 x 3.1in. Port
+       positions read off the board photo, in inches from top-left. */
+    id: "SYSCR", label: "Systemcore", w: 6.3, h: 3.1, shape: "board",
     ports: [
-      { id: "PWR", label: "Power", x: 0, y: 1.0, edge: "left", kind: "power" },
-      { id: "CAN", label: "CAN", x: 0, y: 2.2, edge: "left", kind: "can" },
-      { id: "ETH", label: "Ethernet", x: 5.0, y: 0.9, edge: "right", kind: "eth" },
-      ...[0, 1, 2, 3].map((i) => ({
-        id: `PWM${i}`, label: `PWM ${i}`, x: 0.8 + i * 0.6, y: 3.5, edge: "bottom", kind: "pwm",
+      { id: "PWR-", label: "Power −", x: 0.82, y: 0, edge: "top", kind: "power" },
+      { id: "PWR+", label: "Power +", x: 1.08, y: 0, edge: "top", kind: "power" },
+      { id: "BRIDGE", label: "Bridge", x: 1.54, y: 0, edge: "top", kind: "power" },
+      { id: "LINK", label: "Link (USB-C)", x: 2.23, y: 0, edge: "top", kind: "eth" },
+      ...[0, 1, 2, 3, 4].map((i) => ({
+        id: `CAN${i}`, label: `CAN ${i}`, num: String(i),
+        x: 2.94 + i * 0.6, y: 0, edge: "top", kind: "can",
+      })),
+      { id: "ETH", label: "Ethernet", x: 6.3, y: 1.29, edge: "right", kind: "eth" },
+      { id: "RSL", label: "RSL", x: 0.51, y: 3.1, edge: "bottom", kind: "dio" },
+      ...[0, 1, 2, 3, 4, 5].map((i) => ({
+        id: `SIO${i}`, label: `Smart I/O ${i}`, num: String(i),
+        x: 1.10 + i * 0.32, y: 3.1, edge: "bottom", kind: "dio",
       })),
       ...[0, 1, 2, 3].map((i) => ({
-        id: `DIO${i}`, label: `DIO ${i}`, x: 3.3 + i * 0.4, y: 3.5, edge: "bottom", kind: "dio",
+        id: `USB${i}`, label: `USB ${i}`, x: 3.58 + i * 0.47, y: 3.1, edge: "bottom", kind: "eth",
+      })),
+      ...[0, 1].map((i) => ({
+        id: `I2C${i}`, label: `I2C ${i}`, x: 5.55 + i * 0.23, y: 3.1, edge: "bottom", kind: "dio",
       })),
     ],
   },
