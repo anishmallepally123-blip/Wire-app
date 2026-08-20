@@ -1,6 +1,6 @@
 import React, { useState, useRef, useMemo, useCallback } from "react";
 import { COLS, ROWS, PAN_IN, buildGrid, routePorts, toSvgPath } from "./routing.js";
-import { CPI, PARTS, PART_LIST, PORT_KIND, inToCell, partFor } from "./parts.js";
+import { CPI, PARTS, PART_LIST, PORT_KIND, inToCell, partFor, rotatedSize, portsOfRotated } from "./parts.js";
 import { abbrev } from "./naming.js";
 
 const CELL = 7;                       /* screen px per grid cell */
@@ -38,7 +38,10 @@ export default function LayoutTab({
       if (!a || !b || a === b) { offPan++; return; }
       const pa = findPort(a, w.fromPort);
       const pb = findPort(b, w.toPort);
-      if (!pa || !pb) { noPort++; return; }
+      /* A part with no port map (motors) routes edge-to-edge instead. */
+      if ((portsOfRotated(a).length && !pa) || (portsOfRotated(b).length && !pb)) {
+        noPort++; return;
+      }
       const key = [a.id, b.id].sort().join("|");
       const n = pairSeen[key] || 0;
       pairSeen[key] = n + 1;
@@ -150,9 +153,24 @@ export default function LayoutTab({
     put({
       id: `c${Date.now()}${Math.floor(Math.random() * 1000)}`,
       kind: "component", partId: part.id, compId: abbrev(label), label,
-      x: spot.x, y: spot.y, w, h,
+      x: spot.x, y: spot.y, w, h, rot: 0,
     });
   }
+
+  /* Rotating swaps the footprint and carries the ports round with it. */
+  function rotate(item) {
+    const part = partFor(item);
+    if (!part) return;
+    const rot = (((item.rot || 0) + 90) % 360);
+    const { w, h } = rotatedSize(part, rot);
+    put({
+      ...item, rot,
+      w: inToCell(w), h: inToCell(h),
+      x: clamp(item.x, 0, COLS - inToCell(w)),
+      y: clamp(item.y, 0, ROWS - inToCell(h)),
+    });
+  }
+
   function addCorner(corner) {
     const part = PARTS.KRK60;
     const w = inToCell(part.w), h = inToCell(part.h);
@@ -162,7 +180,7 @@ export default function LayoutTab({
       const it = {
         id: `c${Date.now()}${Math.floor(Math.random() * 10000)}`,
         kind: "component", partId: part.id, compId: abbrev(label), label,
-        x: spot.x, y: spot.y, w, h,
+        x: spot.x, y: spot.y, w, h, rot: 0,
       };
       pool = [...pool, it];
       put(it);
@@ -170,7 +188,7 @@ export default function LayoutTab({
   }
   function addBlock(kind) {
     const size = kind === "grommet"
-      ? { w: inToCell(0.5), h: inToCell(0.5) }
+      ? { w: inToCell(0.75), h: inToCell(0.75) }
       : { w: inToCell(0.5), h: inToCell(6) };
     const spot = freeSpot(items, size.w, size.h);
     put({
@@ -283,7 +301,7 @@ export default function LayoutTab({
                 const it = shown(i);
                 return (
                   <circle key={i.id} cx={(it.x + it.w / 2) * CELL} cy={(it.y + it.h / 2) * CELL}
-                    r={Math.max(3.5, (it.w * CELL) / 2)} fill="#fff"
+                    r={(it.w * CELL) / 2} fill="#fff"
                     stroke={sel === i.id ? "#161B22" : "#59636E"}
                     strokeWidth={sel === i.id ? 2.5 : 1.4}
                     style={{ cursor: editing ? "move" : "default" }}
@@ -322,6 +340,10 @@ export default function LayoutTab({
                   ? (selected.kind === "component" ? "Rename or drag" : "Drag to move")
                   : dirty ? "Unsaved changes — hit Done to save" : "Drag anything to move it"}
               </span>
+              {selected && selected.kind === "component" && (
+                <button className="btn btn-sm" onClick={() => rotate(selected)}
+                  title="Rotate 90°">Rotate</button>
+              )}
               {selected && selected.kind === "component" && (
                 <input className="renamer" value={selected.label} aria-label="Component name"
                   placeholder="Name this component"
@@ -385,13 +407,10 @@ function Footprint({ item, selected, editing, onDown }) {
     <g style={{ cursor: editing ? "move" : "default" }} onPointerDown={(e) => onDown(e, item)}>
       {shape === "motor" ? (
         <>
-          {/* round can, seen from above, with the output shaft boss */}
-          <circle cx={x + w / 2} cy={y + w / 2} r={w / 2 - 1}
+          <circle cx={x + w / 2} cy={y + h / 2} r={Math.min(w, h) / 2 - 1}
             fill="#F4F6F8" stroke={stroke} strokeWidth={sw} />
-          <circle cx={x + w / 2} cy={y + w / 2} r={w / 4}
+          <circle cx={x + w / 2} cy={y + h / 2} r={Math.min(w, h) / 5}
             fill="none" stroke="#A5ADB6" strokeWidth="1" />
-          <rect x={x + 2} y={y + w} width={w - 4} height={h - w} rx="2"
-            fill="#F4F6F8" stroke={stroke} strokeWidth={sw} />
         </>
       ) : shape === "battery" ? (
         <>
@@ -411,21 +430,23 @@ function Footprint({ item, selected, editing, onDown }) {
         <>
           <rect x={x} y={y} width={w} height={h} rx="2"
             fill="#F4F6F8" stroke={stroke} strokeWidth={sw} />
-          {/* WAGO terminal blocks down both long sides */}
-          {[0, 1].map((row) =>
-            [...Array(10)].map((_, i) => (
-              <rect key={`${row}-${i}`}
-                x={x + (0.3 + i * 0.4) * CPI * CELL}
-                y={row ? y + h - 0.42 * CPI * CELL : y + 0.05 * CPI * CELL}
-                width={0.3 * CPI * CELL} height={0.37 * CPI * CELL} rx="1"
+          {/* WAGO blocks drawn from the rotated port positions, so they stay
+              on the terminal edges however the board is turned */}
+          {portsOfRotated(item).filter((p) => /^\d+$/.test(p.id) && +p.id < 20).map((p) => {
+            const px = (item.x + p.x * CPI) * CELL, py = (item.y + p.y * CPI) * CELL;
+            const vert = p.edge === "left" || p.edge === "right";
+            const a = 0.3 * CPI * CELL, b = 0.34 * CPI * CELL;
+            return (
+              <rect key={p.id}
+                x={px - (vert ? b : a) / 2} y={py - (vert ? a : b) / 2}
+                width={vert ? b : a} height={vert ? a : b} rx="1"
                 fill="#D9C27A" stroke="#A5ADB6" strokeWidth="0.4" />
-            ))
-          )}
-          {/* voltage display */}
-          <rect x={x + w * 0.3} y={y + h * 0.38} width={w * 0.34} height={h * 0.24}
+            );
+          })}
+          <rect x={x + w * 0.32} y={y + h * 0.4} width={w * 0.36} height={h * 0.2}
             rx="1" fill="#1B1B1B" />
-          <text x={x + w * 0.47} y={y + h * 0.55} textAnchor="middle"
-            fontSize={Math.min(9, h * 0.15)} fill="#7CE07C"
+          <text x={x + w * 0.5} y={y + h * 0.545} textAnchor="middle"
+            fontSize={Math.min(8, Math.min(w, h) * 0.16)} fill="#7CE07C"
             fontFamily="'IBM Plex Mono', monospace">12.4V</text>
         </>
       ) : (
@@ -434,7 +455,7 @@ function Footprint({ item, selected, editing, onDown }) {
       )}
 
       {/* ports */}
-      {(part?.ports || []).map((p) => (
+      {portsOfRotated(item).map((p) => (
         <circle key={p.id}
           cx={(item.x + p.x * CPI) * CELL} cy={(item.y + p.y * CPI) * CELL}
           r="2.1" fill="#fff" stroke={PORT_KIND[p.kind] || "#59636E"} strokeWidth="1.3" />
