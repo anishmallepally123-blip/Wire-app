@@ -98,22 +98,11 @@ export const PARTS = {
       { id: "LOAD", label: "Load", x: 2.3, y: 0.85, edge: "right", kind: "power" },
     ],
   },
-  KRK60: {
-    id: "KRK60", label: "Kraken x60", w: 2.8, h: 3.9, shape: "motor",
-    ports: [
-      { id: "V+", label: "V+", x: 0.8, y: 3.9, edge: "bottom", kind: "power" },
-      { id: "V-", label: "V−", x: 1.5, y: 3.9, edge: "bottom", kind: "power" },
-      { id: "CAN", label: "CAN", x: 2.2, y: 3.9, edge: "bottom", kind: "can" },
-    ],
-  },
-  KRK44: {
-    id: "KRK44", label: "Kraken x44", w: 2.0, h: 3.2, shape: "motor",
-    ports: [
-      { id: "V+", label: "V+", x: 0.5, y: 3.2, edge: "bottom", kind: "power" },
-      { id: "V-", label: "V−", x: 1.0, y: 3.2, edge: "bottom", kind: "power" },
-      { id: "CAN", label: "CAN", x: 1.5, y: 3.2, edge: "bottom", kind: "can" },
-    ],
-  },
+  /* Motors are round cans with a pigtail — no terminal worth pinning down,
+     so wires anchor at the nearest edge instead. */
+  KRK60: { id: "KRK60", label: "Kraken x60", w: 2.6, h: 2.6, shape: "motor", ports: [] },
+  KRK44: { id: "KRK44", label: "Kraken x44", w: 1.8, h: 1.8, shape: "motor", ports: [] },
+  NEO:   { id: "NEO",   label: "NEO",        w: 2.2, h: 2.2, shape: "motor", ports: [] },
   RDIO: {
     id: "RDIO", label: "Radio", w: 4.6, h: 3.3, shape: "board",
     ports: [
@@ -146,6 +135,37 @@ export const PORT_KIND = {
   pwm:   "#2E6FC4",
   dio:   "#0F8F94",
 };
+
+/* Rotation. Components store rot in degrees (0/90/180/270); the footprint
+   swaps w/h at 90 and 270, and port offsets rotate with it. */
+export function rotatedSize(part, rot) {
+  return (rot === 90 || rot === 270)
+    ? { w: part.h, h: part.w }
+    : { w: part.w, h: part.h };
+}
+
+const EDGE_CW = { top: "right", right: "bottom", bottom: "left", left: "top" };
+function rotEdge(edge, rot) {
+  let e = edge;
+  for (let r = 0; r < ((rot / 90) | 0) % 4; r++) e = EDGE_CW[e] || e;
+  return e;
+}
+
+export function rotatedPort(part, port, rot) {
+  const { w, h } = part;
+  let x = port.x, y = port.y;
+  if (rot === 90)  { [x, y] = [h - port.y, port.x]; }
+  if (rot === 180) { [x, y] = [w - port.x, h - port.y]; }
+  if (rot === 270) { [x, y] = [port.y, w - port.x]; }
+  return { ...port, x, y, edge: rotEdge(port.edge, rot) };
+}
+
+export function portsOfRotated(item) {
+  const part = partFor(item);
+  if (!part) return [];
+  const rot = ((item.rot || 0) % 360 + 360) % 360;
+  return part.ports.map((p) => rotatedPort(part, p, rot));
+}
 
 export function partFor(item) {
   return PARTS[item.partId] || null;
