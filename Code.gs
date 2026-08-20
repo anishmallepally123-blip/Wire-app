@@ -19,11 +19,11 @@ var HEADERS = ['id', 'name', 'type', 'gauge', 'fromDevice', 'fromPort',
                'toDevice', 'toPort', 'notes', 'nameOverride', 'updatedAt', 'stage'];
 
 var LAYOUT_NAME = 'Layout';
-var LAYOUT_HEADERS = ['id', 'kind', 'partId', 'compId', 'label', 'x', 'y', 'w', 'h', 'updatedAt'];
+var LAYOUT_HEADERS = ['id', 'kind', 'partId', 'compId', 'label', 'x', 'y', 'w', 'h', 'rot', 'updatedAt'];
 
 /* Bump this whenever you paste in a new copy. Open the /exec URL in a browser
    and check the version number to confirm the deployment actually updated. */
-var VERSION = 6;
+var VERSION = 7;
 
 function doPost(e) {
   var lock = LockService.getScriptLock();
@@ -105,6 +105,11 @@ function layoutSheet() {
     sh = ss.insertSheet(LAYOUT_NAME);
     writeHeaders(sh, LAYOUT_HEADERS);
   } else if (sh.getLastColumn() < LAYOUT_HEADERS.length) {
+    /* Column meanings changed between versions. Rewriting the header over
+       existing rows would silently shift every value one column left, so
+       clear the data instead and let the pan be re-placed. */
+    var last = sh.getLastRow();
+    if (last > 1) sh.getRange(2, 1, last - 1, sh.getLastColumn()).clearContent();
     writeHeaders(sh, LAYOUT_HEADERS);
   }
   return sh;
@@ -121,7 +126,8 @@ function layoutReadAll() {
       x: Number(r[5]) || 0,
       y: Number(r[6]) || 0,
       w: Number(r[7]) || 1,
-      h: Number(r[8]) || 1
+      h: Number(r[8]) || 1,
+      rot: Number(r[9]) || 0
     };
   });
 }
