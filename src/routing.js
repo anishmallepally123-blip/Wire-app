@@ -66,8 +66,34 @@ export function buildGrid(items) {
   };
   items.filter((i) => i.kind === "obstacle").forEach((i) => fill(i, 1));
   items.filter((i) => i.kind === "component").forEach((i) => fill(i, 2));
-  items.filter((i) => i.kind === "grommet").forEach((i) => fill(i, 0));
+  items.filter((i) => i.kind === "grommet").forEach((i) => punch(g, i));
   return g;
+}
+
+/* A grommet is a hole all the way through, however thick the member is.
+   Clearing only the cells it covers means a 1.5in cross-member stays sealed
+   against a 0.75in grommet — so bore outward in all four directions until
+   the obstacle ends. */
+function punch(g, grom) {
+  const cx = Math.round(grom.x + grom.w / 2);
+  const cy = Math.round(grom.y + grom.h / 2);
+  const half = Math.max(1, Math.round(Math.min(grom.w, grom.h) / 2));
+
+  for (let oy = -half; oy <= half; oy++) {
+    for (let ox = -half; ox <= half; ox++) {
+      const sx = cx + ox, sy = cy + oy;
+      if (sx < 0 || sy < 0 || sx >= COLS || sy >= ROWS) continue;
+      g[sy][sx] = 0;
+      /* bore along both axes through contiguous obstacle */
+      for (const [dx, dy] of DIRS) {
+        let x = sx + dx, y = sy + dy;
+        while (x >= 0 && y >= 0 && x < COLS && y < ROWS && g[y][x] === 1) {
+          g[y][x] = 0;
+          x += dx; y += dy;
+        }
+      }
+    }
+  }
 }
 
 /* A port sits on a component edge, which is solid. Step one cell outward so
