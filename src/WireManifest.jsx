@@ -1,7 +1,7 @@
 import { store } from "./store.js";
 import { callSheetRaw } from "./sheet.js";
 import LayoutTab from "./LayoutTab.jsx";
-import { partFor, PARTS, inToCell } from "./parts.js";
+import { partFor } from "./parts.js";
 import { findConflicts } from "./conflicts.js";
 import { endpointCode, abbrev } from "./naming.js";
 import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
@@ -79,28 +79,6 @@ export default function WireManifest() {
     try { await store.set(KEY, JSON.stringify(list)); } catch (e) {}
   }, []);
 
-  /* Layouts saved before the pan was drawn to scale used a 32x24 grid and
-     had no partId. Rescale the positions and adopt the real part size, so a
-     team that already placed a pan doesn't lose it. */
-  const migrate = useCallback((items) => {
-    if (!items.some((i) => i.kind === "component" && !i.partId)) return items;
-    return items.map((i) => {
-      if (i.partId) return i;
-      const guess = Object.values(PARTS).find(
-        (p) => p.label.toLowerCase() === String(i.label || "").toLowerCase()
-      ) || (i.kind === "component" ? PARTS.KRK60 : null);
-      const x = Math.round(i.x * 3.5);
-      const y = Math.round(i.y * 4);
-      if (i.kind !== "component") {
-        return { ...i, x, y, w: Math.max(2, Math.round(i.w * 3.5)), h: Math.max(2, Math.round(i.h * 4)) };
-      }
-      return {
-        ...i, x, y, partId: guess.id,
-        w: inToCell(guess.w), h: inToCell(guess.h),
-      };
-    });
-  }, []);
-
   const cacheLayout = useCallback(async (items) => {
     try { await store.set(LAYOUT_KEY, JSON.stringify(items)); } catch (e) {}
   }, []);
@@ -116,9 +94,8 @@ export default function WireManifest() {
       /* An empty layout coming back while we hold items locally means the
          write didn't land — keep ours rather than blanking the pan. */
       if (Array.isArray(res.layout) && (res.layout.length || !layout.length)) {
-        const m = migrate(res.layout);
-        setLayout(m);
-        cacheLayout(m);
+        setLayout(res.layout);
+        cacheLayout(res.layout);
       } else if (Array.isArray(res.layout) && !res.layout.length && layout.length) {
         setSync({ state: "off", msg: "Layout didn't save — is the script redeployed?" });
         return;
@@ -138,7 +115,7 @@ export default function WireManifest() {
       } catch (e) {}
       try {
         const l = await store.get(LAYOUT_KEY);
-        if (l && l.value) setLayout(migrate(JSON.parse(l.value)));
+        if (l && l.value) setLayout(JSON.parse(l.value));
       } catch (e) {}
       let url = "";
       try {
@@ -172,9 +149,8 @@ export default function WireManifest() {
       /* An empty layout coming back while we hold items locally means the
          write didn't land — keep ours rather than blanking the pan. */
       if (Array.isArray(res.layout) && (res.layout.length || !layout.length)) {
-        const m = migrate(res.layout);
-        setLayout(m);
-        cacheLayout(m);
+        setLayout(res.layout);
+        cacheLayout(res.layout);
       } else if (Array.isArray(res.layout) && !res.layout.length && layout.length) {
         setSync({ state: "off", msg: "Layout didn't save — is the script redeployed?" });
         return;
@@ -280,9 +256,8 @@ export default function WireManifest() {
     try {
       const res = await callSheetRaw(sheetUrl, { action: "layoutSave", layout: items });
       if (Array.isArray(res.layout)) {
-        const m = migrate(res.layout);
-        setLayout(m);
-        cacheLayout(m);
+        setLayout(res.layout);
+        cacheLayout(res.layout);
       }
       if (Array.isArray(res.wires)) {
         setWires(res.wires);
