@@ -7,7 +7,7 @@ import { CPI } from "./parts.js";
  * Going finer resolves nothing extra and makes a full re-route take seconds
  * on a phone, so 4 is the ceiling as well as the floor. */
 
-export const PAN_IN = { w: 28, h: 24 };
+export const PAN_IN = { w: 27, h: 27 };   /* typical FRC drivetrain */
 export const COLS = PAN_IN.w * CPI;
 export const ROWS = PAN_IN.h * CPI;
 
@@ -90,19 +90,46 @@ function anchorFor(item, port, grid) {
   return null;
 }
 
+/* A motor has no terminals worth modelling, so aim at the edge of its body
+   facing the other end — the old box behaviour, kept just for those. */
+function edgeAnchor(item, toward, grid) {
+  const cx = item.x + item.w / 2, cy = item.y + item.h / 2;
+  const tx = toward.x + toward.w / 2, ty = toward.y + toward.h / 2;
+  const horiz = Math.abs(tx - cx) > Math.abs(ty - cy);
+  const px = horiz ? (tx > cx ? item.x + item.w : item.x - 1) : Math.round(cx);
+  const py = horiz ? Math.round(cy) : (ty > cy ? item.y + item.h : item.y - 1);
+  const fake = { x: px - item.x, y: py - item.y, edge:
+    horiz ? (tx > cx ? "right" : "left") : (ty > cy ? "bottom" : "top") };
+  return { pos: { x: px, y: py }, port: { x: fake.x / 4, y: fake.y / 4, edge: fake.edge } };
+}
+
 export function routePorts(from, to, grid) {
-  const s = anchorFor(from.item, from.port, grid);
-  const e = anchorFor(to.item, to.port, grid);
+  const s = from.port
+    ? anchorFor(from.item, from.port, grid)
+    : nearestFree(edgeAnchor(from.item, to.item, grid).pos, grid);
+  const e = to.port
+    ? anchorFor(to.item, to.port, grid)
+    : nearestFree(edgeAnchor(to.item, from.item, grid).pos, grid);
   if (!s || !e) return null;
   const cells = astar(s, e, grid);
   if (!cells) return null;
-  return {
-    cells,
-    /* True fractional port positions, so the dot and the stub line up with
-       the terminal rather than snapping to the nearest cell. */
-    start: { x: from.item.x + from.port.x * CPI, y: from.item.y + from.port.y * CPI },
-    end: { x: to.item.x + to.port.x * CPI, y: to.item.y + to.port.y * CPI },
-  };
+  const at = (side, anchor) => side.port
+    ? { x: side.item.x + side.port.x * CPI, y: side.item.y + side.port.y * CPI }
+    : { x: anchor.x + 0.5, y: anchor.y + 0.5 };
+  return { cells, start: at(from, s), end: at(to, e) };
+}
+
+function nearestFree(p, grid) {
+  for (let r = 0; r <= 6; r++) {
+    for (let dy = -r; dy <= r; dy++) {
+      for (let dx = -r; dx <= r; dx++) {
+        const x = p.x + dx, y = p.y + dy;
+        if (x < 0 || y < 0 || x >= COLS || y >= ROWS) continue;
+        if (grid[y][x] === 0) return { x, y };
+      }
+    }
+  }
+  return null;
 }
 
 function astar(s, e, grid) {
