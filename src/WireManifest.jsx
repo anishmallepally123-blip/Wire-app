@@ -10,11 +10,12 @@ import React, { useState, useEffect, useMemo, useRef, useCallback } from "react"
 /*  The five wires this team runs. Color carries the type.             */
 /* ------------------------------------------------------------------ */
 const TYPES = [
-  { id: "PWR12", label: "12 AWG Power", short: "Power",    gauge: "12", color: "#C2352B", plain: "12 AWG power" },
-  { id: "PWR22", label: "22 AWG Power", short: "Power",    gauge: "22", color: "#E2711D", plain: "22 AWG power" },
-  { id: "CAN",   label: "CAN",          short: "CAN",      gauge: "22", color: "#2E9E6B", plain: "CAN bus" },
-  { id: "ETH",   label: "Ethernet",     short: "Ethernet", gauge: "24", color: "#5B4B8A", plain: "Ethernet" },
-  { id: "PWM",   label: "PWM",          short: "PWM",      gauge: "26", color: "#2E6FC4", plain: "PWM signal" },
+  { id: "PWR4",  label: "4 AWG Battery", color: "#8A2B23", gauge: "4",  plain: "4 AWG battery" },
+  { id: "PWR12", label: "12 AWG Power",  color: "#C2352B", gauge: "12", plain: "12 AWG power" },
+  { id: "PWR22", label: "22 AWG Power",  color: "#E8912B", gauge: "22", plain: "22 AWG power" },
+  { id: "CAN",   label: "CAN",           color: "#2E9E6B", gauge: "22", plain: "CAN bus" },
+  { id: "ETH",   label: "Ethernet",      color: "#5B4B8A", gauge: "24", plain: "Ethernet" },
+  { id: "PWM",   label: "PWM",           color: "#2E6FC4", gauge: "26", plain: "PWM signal" },
 ];
 const T = Object.fromEntries(TYPES.map((t) => [t.id, t]));
 
