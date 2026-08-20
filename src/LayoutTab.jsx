@@ -455,11 +455,26 @@ function Footprint({ item, selected, editing, onDown }) {
       )}
 
       {/* ports */}
-      {portsOfRotated(item).map((p) => (
-        <circle key={p.id}
-          cx={(item.x + p.x * CPI) * CELL} cy={(item.y + p.y * CPI) * CELL}
-          r="2.1" fill="#fff" stroke={PORT_KIND[p.kind] || "#59636E"} strokeWidth="1.3" />
-      ))}
+      {portsOfRotated(item).map((p) => {
+        const px = (item.x + p.x * CPI) * CELL;
+        const py = (item.y + p.y * CPI) * CELL;
+        /* Nudge the number outward from whichever edge the port is on, so it
+           sits off the board rather than on top of the terminal. */
+        const off = 7;
+        const nx = px + (p.edge === "left" ? -off : p.edge === "right" ? off : 0);
+        const ny = py + (p.edge === "top" ? -off : p.edge === "bottom" ? off : 0)
+                      + (p.edge === "left" || p.edge === "right" ? 2.4 : 0);
+        return (
+          <g key={p.id}>
+            <circle cx={px} cy={py} r="2.1" fill="#fff"
+              stroke={PORT_KIND[p.kind] || "#59636E"} strokeWidth="1.3" />
+            {p.num != null && (
+              <text x={nx} y={ny} textAnchor="middle" fontSize="6.5"
+                fontFamily="'IBM Plex Mono', monospace" fill="#59636E">{p.num}</text>
+            )}
+          </g>
+        );
+      })}
 
       <text x={x + w / 2} y={y + h + 9} textAnchor="middle"
         fontSize="9" fontFamily="'IBM Plex Mono', monospace" fill="#161B22">
@@ -474,15 +489,18 @@ const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
 /* "4", "04", "Ch 4" and "PWM0" all have to find their terminal. */
 export function findPort(item, raw) {
-  const part = partFor(item);
-  if (!part) return null;
+  /* Must use the ROTATED ports — the unrotated set sends wires to where the
+     terminal would be if the board had never been turned. */
+  const ports = portsOfRotated(item);
+  if (!ports.length) return null;
   const want = String(raw || "").trim().toUpperCase().replace(/[^A-Z0-9+-]/g, "");
-  if (!want) return part.ports[0] || null;      /* unspecified: use the first */
+  if (!want) return ports[0] || null;           /* unspecified: use the first */
   const num = /^\d+$/.test(want) ? String(parseInt(want, 10)) : null;
   return (
-    part.ports.find((p) => p.id.toUpperCase() === want) ||
-    (num && part.ports.find((p) => p.id === num)) ||
-    part.ports.find((p) => p.id.toUpperCase().replace(/[^A-Z0-9+-]/g, "") === want) ||
+    ports.find((p) => p.id.toUpperCase() === want) ||
+    (num && ports.find((p) => p.id === num)) ||
+    (num && ports.find((p) => p.num === num)) ||
+    ports.find((p) => p.id.toUpperCase().replace(/[^A-Z0-9+-]/g, "") === want) ||
     null
   );
 }
